@@ -25,7 +25,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         prog="slackbot.py",
         description=(
-            "HomeCommander - Raspberry Pi LAN 管理 Slack Bot\n"
+            "LAN 管理 Slack Bot\n"
             "Slack のスラッシュコマンド経由で自宅 LAN を管理します。\n"
             "VPN 不要・ポート開放不要・Socket Mode で動作。"
         ),
@@ -109,7 +109,7 @@ def setup_logging(log_dir: str, debug: bool = False) -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    logger = logging.getLogger("homecommander")
+    logger = logging.getLogger("slackbot")
     logger.setLevel(logging.DEBUG if debug else logging.INFO)
 
     # ファイルハンドラ: SD カード保護のため常に INFO 以上のみ書き込む
@@ -288,7 +288,7 @@ def get_status():
     uptime = f"{hours}時間{minutes}分{seconds}秒"
 
     lines = [
-        "*HomeCommander 状況*",
+        "*SlackBot 状況*",
         "```",
         f"CPU温度     : {cpu_temp}",
         f"CPU使用率   : {cpu_usage}%",
@@ -456,7 +456,7 @@ def notify_start():
         hostname = socket.gethostname()
         app.client.chat_postMessage(
             channel=user,
-            text=f"✅ HomeCommander が起動しました。\nホスト: {hostname}\n起動時刻: {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+            text=f"✅ SlackBot が起動しました。\nホスト: {hostname}\n起動時刻: {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
     except Exception as e:
         logger.warning("起動通知の送信に失敗しました: %s", e)
@@ -906,7 +906,7 @@ HOME_BLOCKS = [
             "text": (
                 "*📡 監視・情報*\n"
                 f"```\n"
-                f"{CMD} status       HomeCommander の状態\n"
+                f"{CMD} status       SlackBot の状態\n"
                 f"{CMD} scan         LAN スキャン（表形式）\n"
                 f"{CMD} speedtest    回線速度測定（履歴付き）\n"
                 "```"
@@ -978,7 +978,7 @@ def handle_app_home_opened(client, event):
 # -------------------------
 if __name__ == "__main__":
     logger.info("=" * 50)
-    logger.info("HomeCommander 起動")
+    logger.info("SlackBot 起動")
     logger.info("データディレクトリ : %s", DATA_BASE)
     logger.info("コマンド           : %s", CMD)
     logger.info("デバッグモード     : %s", args.debug)

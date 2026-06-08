@@ -1,5 +1,5 @@
 #!/bin/sh
-# HomeCommander セットアップスクリプト
+# SlackBot セットアップスクリプト
 # 対応環境: macOS (開発) / Raspberry Pi OS Trixi / Ubuntu (本番)
 # 実行: sh setup.sh
 set -eu
@@ -17,7 +17,7 @@ warn()  { echo "[WARN] $*"; }
 error() { echo "[ERROR] $*" >&2; exit 1; }
 step()  { echo ""; echo "--- $* ---"; }
 
-echo "=== HomeCommander セットアップ ==="
+echo "=== SlackBot セットアップ ==="
 echo "プロジェクト : $SCRIPT_DIR"
 echo "OS          : $OS"
 
