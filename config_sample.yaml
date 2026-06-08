@@ -1,32 +1,93 @@
+# ============================================================
+# SlackBot 設定ファイル
+# このファイルを config.yaml にコピーして編集してください。
+# ============================================================
+
+bot:
+  # Slack スラッシュコマンド名
+  # Slack アプリ設定の Slash Commands に同じ名前で登録してください
+  # 例: "local" → /local scan, /local wol <name>
+  command: "local"
+
 slack:
+  # Slack Bot Token
+  # api.slack.com/apps → OAuth & Permissions → Bot User OAuth Token
+  # 形式: xoxb-...
   bot_token: "xoxb-***"
+
+  # Slack App-Level Token（Socket Mode 用）
+  # api.slack.com/apps → Basic Information → App-Level Tokens
+  # 形式: xapp-...  スコープ: connections:write
   app_token: "xapp-***"
-  notify_user: "@your_user_id"
+
+  # 通知送信先ユーザーの表示名（ログ・メモ用。動作には影響しない）
+  notify_user: "@your_user"
+
+  # 通知送信先ユーザーの ID（U から始まる形式）
+  # Slack デスクトップ → プロフィール → 「…」→「メンバー ID をコピー」
+  # shutdown / reboot コマンドの権限チェックにも使用される
   notify_user_id: "U12345678"
 
+# ============================================================
+# ネットワーク
+# ============================================================
 network:
+  # LAN スキャン対象の CIDR（scan コマンド）
   cidr: "192.168.1.0/24"
 
+# ============================================================
+# WOL 対象ホスト（wol コマンド・watch コマンドの名前解決）
+# 複数追加可能
+# ============================================================
 hosts:
-  desktop:
+  desktop:                      # wol desktop / watch desktop などで使う名前
     ip: "192.168.1.20"
-    mac: "11:22:33:44:55:66"
+    mac: "11:22:33:44:55:66"   # コロン区切り or ハイフン区切りどちらも可
 
+  # nas:
+  #   ip: "192.168.1.30"
+  #   mac: "AA:BB:CC:DD:EE:FF"
+
+# ============================================================
+# WOL 後のポート確認対象（wol コマンドで起動確認後に表示）
+# ============================================================
 ports:
   ssh: 22
   rdp: 3389
   smb: 445
 
+# ============================================================
+# PC 操作対象（pc shutdown / pc reboot コマンド）
+# 複数追加可能
+# ============================================================
 pc:
-  desktop:
+  desktop:                  # pc shutdown desktop / pc reboot desktop で使う名前
     ip: "192.168.1.20"
-    os: "windows"
+    os: "windows"           # "windows"（net rpc）または "linux" / "macos"（SSH）
     user: "your_user"
     password: "your_password"
 
+  # linux-server:
+  #   ip: "192.168.1.50"
+  #   os: "linux"
+  #   user: "pi"
+  #   password: ""          # SSH 鍵認証の場合は空欄でも可
+
+# ============================================================
+# 無操作シャットダウン
+# ============================================================
 timeout:
+  # この時間（分）Slack に操作がなければ Raspberry Pi を自動シャットダウン
+  # extend <分> コマンドで延長可能
+  # 0 を指定すると無操作シャットダウンを無効化（手動 shutdown コマンドのみ）
   minutes: 30
 
+# ============================================================
+# 疎通監視（watch コマンド）
+# ============================================================
 watch:
+  # ping が連続でこの回数失敗したら「オフライン」と判定して通知
   fail_threshold: 3
+
+  # ping チェックの間隔（秒）
   interval: 10
