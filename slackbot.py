@@ -18,8 +18,32 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 # データパス解決（CLI > ENV > デフォルト）
 # -------------------------
 def resolve_data_path():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data", help="config.yaml と logs を置くディレクトリ")
+    parser = argparse.ArgumentParser(
+        prog="slackbot.py",
+        description=(
+            "HomeCommander - Raspberry Pi LAN 管理 Slack Bot\n"
+            "Slack のスラッシュコマンド経由で自宅 LAN を管理します。\n"
+            "VPN 不要・ポート開放不要・Socket Mode で動作。"
+        ),
+        epilog=(
+            "データディレクトリの解決順:\n"
+            "  1. --data オプション\n"
+            "  2. 環境変数 SLACKBOT_DATA\n"
+            "  3. .env ファイル (setup.sh が生成)\n"
+            "  4. スクリプトと同じディレクトリ（フォールバック）\n"
+            "\n"
+            "使用例:\n"
+            "  python slackbot.py\n"
+            "  python slackbot.py --data /mnt/usbdata/slackbot\n"
+            "  SLACKBOT_DATA=/mnt/usbdata/slackbot python slackbot.py"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--data",
+        metavar="DIR",
+        help="config.yaml と logs を置くディレクトリ（省略時は .env またはスクリプトと同じ場所）",
+    )
     args, _ = parser.parse_known_args()
 
     if args.data:
@@ -278,6 +302,9 @@ def timeout_watcher():
     global last_activity, extend_minutes
     timeout_minutes = cfg["timeout"]["minutes"]
 
+    if timeout_minutes == 0:
+        return  # 0 の場合は無操作シャットダウンを無効化
+
     while True:
         now = datetime.now()
         elapsed = now - last_activity
@@ -344,6 +371,14 @@ def watch_ip(ip, name, stop_event):
             break
 
         stop_event.wait(interval)
+
+
+# -------------------------
+# message イベントの未処理警告を抑制
+# -------------------------
+@app.event("message")
+def handle_message_events(body):
+    pass  # スラッシュコマンド移行後は DM メッセージを処理しない
 
 
 # -------------------------
