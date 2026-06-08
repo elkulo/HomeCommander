@@ -299,7 +299,7 @@ def get_status():
     # DATA_BASE がルートと別パーティション（USB 等）ならディスク使用量を追加表示
     try:
         disk_data = psutil.disk_usage(DATA_BASE)
-        if disk_data.device != disk_root.device if hasattr(disk_data, "device") else disk_data.total != disk_root.total:
+        if os.stat(DATA_BASE).st_dev != os.stat("/").st_dev:
             lines.append(
                 f"ディスク(data): {disk_data.used // (1024**3)}GB / {disk_data.total // (1024**3)}GB ({disk_data.percent}%)"
             )
@@ -481,17 +481,23 @@ def timeout_watcher():
         total_timeout = timeout_minutes + extend_minutes
 
         if elapsed > timedelta(minutes=total_timeout):
-            uptime = now - start_time
+            uptime_sec = int((now - start_time).total_seconds())
+            h, rem = divmod(uptime_sec, 3600)
+            m, s = divmod(rem, 60)
+            uptime_str = f"{h}時間{m}分{s}秒"
             user = cfg["slack"]["notify_user_id"]
 
             logger.warning("無操作タイムアウト (%d 分)。シャットダウンします。", total_timeout)
 
-            app.client.chat_postMessage(
-                channel=user,
-                text=f"⚠️ Slack 無操作が {total_timeout} 分を超えました。\n"
-                     f"起動時間: {uptime}\n"
-                     f"シャットダウンします。"
-            )
+            try:
+                app.client.chat_postMessage(
+                    channel=user,
+                    text=f"⚠️ Slack 無操作が {total_timeout} 分を超えました。\n"
+                         f"起動時間: {uptime_str}\n"
+                         f"シャットダウンします。"
+                )
+            except Exception as e:
+                logger.error("タイムアウト通知の送信に失敗しました: %s", e)
 
             subprocess.run(["sudo", "shutdown", "-h", "now"])
             return
@@ -524,10 +530,13 @@ def watch_ip(ip, name, stop_event):
         if is_online:
             if last_state == "offline":
                 logger.info("疎通復帰: %s (%s)", name, ip)
-                app.client.chat_postMessage(
-                    channel=user,
-                    text=f"🎉 {name} ({ip}) がオンラインに復帰しました"
-                )
+                try:
+                    app.client.chat_postMessage(
+                        channel=user,
+                        text=f"🎉 {name} ({ip}) がオンラインに復帰しました"
+                    )
+                except Exception as e:
+                    logger.error("疎通復帰通知の送信に失敗しました: %s", e)
             last_state = "online"
             fail_count = 0
         else:
@@ -535,10 +544,13 @@ def watch_ip(ip, name, stop_event):
             logger.debug("疎通失敗: %s (%s) %d/%d", name, ip, fail_count, threshold)
             if fail_count >= threshold and last_state == "online":
                 logger.warning("疎通断: %s (%s) %d回連続失敗", name, ip, fail_count)
-                app.client.chat_postMessage(
-                    channel=user,
-                    text=f"⚠️ {name} ({ip}) がオフラインになりました（{fail_count}回連続失敗）"
-                )
+                try:
+                    app.client.chat_postMessage(
+                        channel=user,
+                        text=f"⚠️ {name} ({ip}) がオフラインになりました（{fail_count}回連続失敗）"
+                    )
+                except Exception as e:
+                    logger.error("疎通断通知の送信に失敗しました: %s", e)
                 last_state = "offline"
 
         try:
@@ -581,7 +593,7 @@ def handle_command(ack, say, command):
             f"*利用可能なコマンド一覧* (`{CMD} <サブコマンド>`)\n"
             "```\n"
             "help               : このヘルプを表示\n"
-            "status             : Raspberry Pi の状態を表示\n"
+            "status             : ホストの状態を表示\n"
             "scan               : LAN をスキャンして表形式で表示\n"
             "wol <name>         : 指定ホストに Wake-on-LAN\n"
             "speedtest          : 回線速度を測定（履歴＋統計）\n"
@@ -591,8 +603,8 @@ def handle_command(ack, say, command):
             "watchlist          : 監視中ホスト一覧\n"
             "pc shutdown <name> : PC をシャットダウン\n"
             "pc reboot <name>   : PC を再起動\n"
-            "shutdown           : Raspberry Pi をシャットダウン\n"
-            "reboot             : Raspberry Pi を再起動\n"
+            "shutdown           : ホストをシャットダウン\n"
+            "reboot             : ホストを再起動\n"
             "```"
         )
         return
@@ -656,7 +668,7 @@ def handle_command(ack, say, command):
             logger.warning("権限エラー: reboot user=%s", user_id)
             say("権限がありません。")
             return
-        logger.warning("Pi 再起動 実行 user=%s", user_id)
+        logger.warning("ホスト再起動 実行 user=%s", user_id)
         say("🔄 再起動します。5秒後に実行します。")
         def _do_reboot():
             time.sleep(5)
@@ -670,7 +682,7 @@ def handle_command(ack, say, command):
             logger.warning("権限エラー: shutdown user=%s", user_id)
             say("権限がありません。")
             return
-        logger.warning("Pi シャットダウン 実行 user=%s", user_id)
+        logger.warning("ホストシャットダウン 実行 user=%s", user_id)
         say("⚠️ シャットダウンします。5秒後に実行します。")
         def _do_shutdown():
             time.sleep(5)
@@ -703,7 +715,7 @@ def handle_command(ack, say, command):
             else:
                 cmd = ["ssh", f'{pc["user"]}@{ip}', "sudo shutdown -h now"]
 
-            subprocess.run(cmd, timeout=5)
+            subprocess.run(cmd, timeout=15)
             logger.info("PC シャットダウン 完了: %s", name)
             say(f"🛑 {name} をシャットダウンしました")
         except Exception as e:
@@ -736,7 +748,7 @@ def handle_command(ack, say, command):
             else:
                 cmd = ["ssh", f'{pc["user"]}@{ip}', "sudo reboot"]
 
-            subprocess.run(cmd, timeout=5)
+            subprocess.run(cmd, timeout=15)
             logger.info("PC 再起動 完了: %s", name)
             say(f"🔄 {name} を再起動しました")
         except Exception as e:
@@ -747,7 +759,16 @@ def handle_command(ack, say, command):
     # scan
     if text == "scan":
         logger.info("LAN スキャン 開始: %s", cfg["network"]["cidr"])
-        raw = scan_network(cfg["network"]["cidr"])
+        try:
+            raw = scan_network(cfg["network"]["cidr"])
+        except subprocess.TimeoutExpired:
+            logger.error("arp-scan タイムアウト (30秒)")
+            say("⚠️ LAN スキャンがタイムアウトしました。")
+            return
+        except Exception as e:
+            logger.error("arp-scan 失敗: %s", e)
+            say(f"⚠️ LAN スキャンに失敗しました: {e}")
+            return
         devices = parse_arp_scan(raw)
         logger.info("LAN スキャン 完了: %d 台検出", len(devices))
         table = format_table(devices)
@@ -756,7 +777,7 @@ def handle_command(ack, say, command):
 
     # wol
     if text.startswith("wol "):
-        name = text.split(" ", 1)[1]
+        name = text.split(" ", 1)[1].strip()
         hosts = cfg.get("hosts", {})
 
         if name not in hosts:
@@ -896,7 +917,7 @@ HOME_BLOCKS = [
     },
     {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": f"Raspberry Pi LAN 管理ボット\n`{CMD} <サブコマンド>` で操作します。"},
+        "text": {"type": "mrkdwn", "text": f"LAN 管理ボット\n`{CMD} <サブコマンド>` で操作します。"},
     },
     {"type": "divider"},
     {
@@ -949,8 +970,8 @@ HOME_BLOCKS = [
                 "*⚙️ システム*\n"
                 f"```\n"
                 f"{CMD} extend <分>   タイムアウト延長\n"
-                f"{CMD} shutdown      Pi シャットダウン\n"
-                f"{CMD} reboot        Pi 再起動\n"
+                f"{CMD} shutdown      ホストシャットダウン\n"
+                f"{CMD} reboot        ホスト再起動\n"
                 "```"
             ),
         },
