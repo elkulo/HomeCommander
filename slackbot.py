@@ -1,4 +1,7 @@
 import os
+import sys
+import platform
+import logging
 import argparse
 import yaml
 import time
@@ -6,6 +9,7 @@ import threading
 import subprocess
 import socket
 import difflib
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 import psutil
@@ -15,9 +19,9 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 
 # -------------------------
-# データパス解決（CLI > ENV > デフォルト）
+# CLI 引数パース
 # -------------------------
-def resolve_data_path():
+def parse_args():
     parser = argparse.ArgumentParser(
         prog="slackbot.py",
         description=(
@@ -34,6 +38,7 @@ def resolve_data_path():
             "\n"
             "使用例:\n"
             "  python slackbot.py\n"
+            "  python slackbot.py --debug\n"
             "  python slackbot.py --data /mnt/usbdata/slackbot\n"
             "  SLACKBOT_DATA=/mnt/usbdata/slackbot python slackbot.py"
         ),
@@ -44,26 +49,44 @@ def resolve_data_path():
         metavar="DIR",
         help="config.yaml と logs を置くディレクトリ（省略時は .env またはスクリプトと同じ場所）",
     )
-    args, _ = parser.parse_known_args()
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="デバッグログを有効化（詳細な動作ログを出力）",
+    )
+    return parser.parse_known_args()[0]
 
+
+args = parse_args()
+
+
+# -------------------------
+# .env 読み込み（全変数を os.environ に反映、既存の環境変数は上書きしない）
+# -------------------------
+def load_dot_env():
+    dot_env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(dot_env):
+        return
+    with open(dot_env) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
+
+load_dot_env()
+
+
+# -------------------------
+# データパス解決（CLI > ENV > デフォルト）
+# -------------------------
+def resolve_data_path():
     if args.data:
         return os.path.abspath(args.data)
-
     env_path = os.environ.get("SLACKBOT_DATA")
     if env_path:
         return env_path
-
-    # .env ファイルから読み込む（setup.sh が生成）
-    dot_env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    if os.path.exists(dot_env):
-        with open(dot_env) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    if k.strip() == "SLACKBOT_DATA":
-                        return v.strip()
-
     return os.path.dirname(os.path.abspath(__file__))
 
 
@@ -78,6 +101,46 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 
 # -------------------------
+# ロギング設定
+# -------------------------
+def setup_logging(log_dir: str, debug: bool = False) -> logging.Logger:
+    level = logging.DEBUG if debug else logging.INFO
+
+    formatter = logging.Formatter(
+        fmt="%(asctime)s [%(levelname)-8s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    logger = logging.getLogger("homecommander")
+    logger.setLevel(level)
+
+    # ファイルハンドラ（ローテーション: 1MB × 5世代）
+    fh = RotatingFileHandler(
+        f"{log_dir}/slackbot.log",
+        maxBytes=1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+
+    # コンソールハンドラ
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    # Slack Bolt / SDK のログは debug 時のみ表示
+    bolt_level = logging.DEBUG if debug else logging.WARNING
+    logging.getLogger("slack_bolt").setLevel(bolt_level)
+    logging.getLogger("slack_sdk").setLevel(bolt_level)
+
+    return logger
+
+
+logger = setup_logging(LOG_DIR, args.debug)
+
+
+# -------------------------
 # 設定読み込み
 # -------------------------
 def load_config():
@@ -88,6 +151,8 @@ def load_config():
 
 
 cfg = load_config()
+logger.debug("config.yaml 読み込み完了: %s", CONFIG_PATH)
+
 app = App(token=cfg["slack"]["bot_token"])
 
 CMD = "/" + cfg.get("bot", {}).get("command", "local")
@@ -99,13 +164,8 @@ watch_targets = {}
 
 
 # -------------------------
-# ログ
+# speedtest ログ（統計計算用に独立ファイルを維持）
 # -------------------------
-def log_command(user, text):
-    with open(f"{LOG_DIR}/slack_commands.log", "a") as f:
-        f.write(f"{datetime.now()}  user={user}  cmd={text}\n")
-
-
 def log_speedtest(result):
     with open(f"{LOG_DIR}/speedtest.log", "a") as f:
         f.write(f"{datetime.now()}\n{result}\n\n")
@@ -172,11 +232,20 @@ def calc_speedtest_stats():
 # Raspberry Pi 状況監視
 # -------------------------
 def get_cpu_temp():
+    # Raspberry Pi: vcgencmd measure_temp → "47.2'C"
     try:
-        out = subprocess.check_output(["vcgencmd", "measure_temp"]).decode()
+        out = subprocess.check_output(["vcgencmd", "measure_temp"], stderr=subprocess.DEVNULL).decode()
         return out.replace("temp=", "").strip()
     except Exception:
-        return "取得不可"
+        pass
+    # Linux 汎用 (Ubuntu など): /sys/class/thermal/thermal_zone0/temp
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            millideg = int(f.read().strip())
+        return f"{millideg / 1000:.1f}'C"
+    except Exception:
+        pass
+    return "取得不可"
 
 
 def get_status():
@@ -203,11 +272,13 @@ def get_status():
 # LAN スキャン
 # -------------------------
 def scan_network(cidr):
+    logger.debug("arp-scan 実行: %s", cidr)
     result = subprocess.run(
         ["sudo", "arp-scan", cidr],
         capture_output=True,
         text=True
     )
+    logger.debug("arp-scan 出力:\n%s", result.stdout)
     return result.stdout
 
 
@@ -240,14 +311,16 @@ def format_table(devices):
 # WOL + 起動確認 + ポート確認
 # -------------------------
 def wait_for_ping(ip, retries=10, interval=2):
-    for _ in range(retries):
+    for i in range(retries):
         result = subprocess.run(
             ["ping", "-c", "1", "-W", "1", ip],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
         if result.returncode == 0:
+            logger.debug("ping OK: %s (%d回目)", ip, i + 1)
             return True
+        logger.debug("ping 失敗: %s (%d/%d)", ip, i + 1, retries)
         time.sleep(interval)
     return False
 
@@ -267,7 +340,9 @@ def check_port(ip, port, timeout=1):
 def check_ports(ip, ports):
     results = {}
     for name, port in ports.items():
-        results[name] = check_port(ip, port)
+        ok = check_port(ip, port)
+        results[name] = ok
+        logger.debug("ポート確認 %s %s:%d -> %s", name, ip, port, "OPEN" if ok else "CLOSED")
     return results
 
 
@@ -275,19 +350,60 @@ def check_ports(ip, ports):
 # speedtest
 # -------------------------
 def run_speedtest():
+    logger.info("speedtest 開始")
     try:
         result = subprocess.check_output(
             ["speedtest-cli", "--simple"],
             stderr=subprocess.STDOUT
         ).decode()
+        logger.debug("speedtest 結果:\n%s", result.strip())
         return result
     except Exception as e:
+        logger.error("speedtest 失敗: %s", e)
         return f"速度測定エラー: {e}"
+
+
+# -------------------------
+# スリープ抑制
+# -------------------------
+def start_sleep_inhibitor():
+    system = platform.system()
+
+    if system == "Darwin":
+        try:
+            # -i: システムスリープ防止  -w: 指定 PID が終了したら caffeinate も終了
+            proc = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+            logger.info("スリープ抑制 有効 (caffeinate PID=%d)", proc.pid)
+            return proc
+        except FileNotFoundError:
+            logger.warning("caffeinate が見つかりません。スリープ抑制をスキップします。")
+
+    elif system == "Linux":
+        if os.environ.get("SLACKBOT_PREVENT_SLEEP", "false").lower() == "true":
+            try:
+                proc = subprocess.Popen([
+                    "systemd-inhibit",
+                    "--what=sleep",
+                    "--who=HomeCommander",
+                    "--why=Slack Bot running",
+                    "--mode=block",
+                    "sleep", "infinity",
+                ])
+                logger.info("スリープ抑制 有効 (systemd-inhibit PID=%d)", proc.pid)
+                return proc
+            except FileNotFoundError:
+                logger.warning("systemd-inhibit が見つかりません。スリープ抑制をスキップします。")
+        else:
+            logger.info("スリープ抑制 無効 (Linux / SLACKBOT_PREVENT_SLEEP=false)")
+
+    return None
+
 
 # -------------------------
 # 起動通知
 # -------------------------
 def notify_start():
+    logger.info("起動通知を送信")
     user = cfg["slack"]["notify_user_id"]
     app.client.chat_postMessage(
         channel=user,
@@ -303,7 +419,10 @@ def timeout_watcher():
     timeout_minutes = cfg["timeout"]["minutes"]
 
     if timeout_minutes == 0:
-        return  # 0 の場合は無操作シャットダウンを無効化
+        logger.info("無操作シャットダウン: 無効 (minutes=0)")
+        return
+
+    logger.info("無操作シャットダウン監視 開始 (タイムアウト: %d 分)", timeout_minutes)
 
     while True:
         now = datetime.now()
@@ -313,6 +432,8 @@ def timeout_watcher():
         if elapsed > timedelta(minutes=total_timeout):
             uptime = now - start_time
             user = cfg["slack"]["notify_user_id"]
+
+            logger.warning("無操作タイムアウト (%d 分)。シャットダウンします。", total_timeout)
 
             app.client.chat_postMessage(
                 channel=user,
@@ -338,6 +459,8 @@ def watch_ip(ip, name, stop_event):
     last_state = "online"
     fail_count = 0
 
+    logger.info("疎通監視 開始: %s (%s) threshold=%d interval=%ds", name, ip, threshold, interval)
+
     while not stop_event.is_set():
         result = subprocess.run(
             ["ping", "-c", "1", "-W", "1", ip],
@@ -349,6 +472,7 @@ def watch_ip(ip, name, stop_event):
 
         if is_online:
             if last_state == "offline":
+                logger.info("疎通復帰: %s (%s)", name, ip)
                 app.client.chat_postMessage(
                     channel=user,
                     text=f"🎉 {name} ({ip}) がオンラインに復帰しました"
@@ -357,7 +481,9 @@ def watch_ip(ip, name, stop_event):
             fail_count = 0
         else:
             fail_count += 1
+            logger.debug("疎通失敗: %s (%s) %d/%d", name, ip, fail_count, threshold)
             if fail_count >= threshold and last_state == "online":
+                logger.warning("疎通断: %s (%s) %d回連続失敗", name, ip, fail_count)
                 app.client.chat_postMessage(
                     channel=user,
                     text=f"⚠️ {name} ({ip}) がオフラインになりました（{fail_count}回連続失敗）"
@@ -371,6 +497,8 @@ def watch_ip(ip, name, stop_event):
             break
 
         stop_event.wait(interval)
+
+    logger.info("疎通監視 停止: %s (%s)", name, ip)
 
 
 # -------------------------
@@ -388,14 +516,13 @@ def handle_message_events(body):
 def handle_command(ack, say, command):
     global last_activity, extend_minutes
 
-    # Slack の 3 秒タイムアウト要件を満たすため最初に ack
     ack()
 
     last_activity = datetime.now()
     text = command.get("text", "").strip()
     user_id = command.get("user_id")
 
-    log_command(user_id, f"{CMD} {text}")
+    logger.info("COMMAND user=%s cmd=%s %s", user_id, CMD, text)
 
     # help
     if text in ("", "help"):
@@ -421,14 +548,16 @@ def handle_command(ack, say, command):
 
     # status
     if text == "status":
+        logger.debug("status 取得")
         say(get_status())
         return
 
-    # speedtest（時間がかかるが ack() 済みなので OK）
+    # speedtest
     if text == "speedtest":
         say("回線速度を測定しています…（30秒ほどかかります）")
         result = run_speedtest()
         log_speedtest(result)
+        logger.info("speedtest 完了")
         stats = calc_speedtest_stats()
 
         msg = f"```\n{result}\n```"
@@ -451,6 +580,7 @@ def handle_command(ack, say, command):
         try:
             mins = int(text.split(" ", 1)[1])
             extend_minutes += mins
+            logger.info("タイムアウト延長: +%d 分 (合計 +%d 分)", mins, extend_minutes)
             say(f"⏱️ 無操作シャットダウンを {mins} 分延長しました。（合計 +{extend_minutes} 分）")
         except Exception:
             say(f"形式: `{CMD} extend <分>`")
@@ -459,8 +589,10 @@ def handle_command(ack, say, command):
     # Raspberry Pi reboot
     if text == "reboot":
         if user_id != cfg["slack"]["notify_user_id"]:
+            logger.warning("権限エラー: reboot user=%s", user_id)
             say("権限がありません。")
             return
+        logger.warning("Pi 再起動 実行 user=%s", user_id)
         say("🔄 再起動します。5秒後に実行します。")
         def _do_reboot():
             time.sleep(5)
@@ -471,8 +603,10 @@ def handle_command(ack, say, command):
     # Raspberry Pi shutdown
     if text == "shutdown":
         if user_id != cfg["slack"]["notify_user_id"]:
+            logger.warning("権限エラー: shutdown user=%s", user_id)
             say("権限がありません。")
             return
+        logger.warning("Pi シャットダウン 実行 user=%s", user_id)
         say("⚠️ シャットダウンします。5秒後に実行します。")
         def _do_shutdown():
             time.sleep(5)
@@ -486,12 +620,13 @@ def handle_command(ack, say, command):
         pcs = cfg.get("pc", {})
 
         if name not in pcs:
+            logger.warning("pc shutdown: 未定義ホスト %s", name)
             say(f"`{name}` は config.yaml にありません")
             return
 
         pc = pcs[name]
         ip = pc["ip"]
-
+        logger.info("PC シャットダウン: %s (%s)", name, ip)
         say(f"{name} をシャットダウンします…")
 
         try:
@@ -505,8 +640,10 @@ def handle_command(ack, say, command):
                 cmd = ["ssh", f'{pc["user"]}@{ip}', "sudo shutdown -h now"]
 
             subprocess.run(cmd, timeout=5)
+            logger.info("PC シャットダウン 完了: %s", name)
             say(f"🛑 {name} をシャットダウンしました")
         except Exception as e:
+            logger.error("PC シャットダウン 失敗: %s - %s", name, e)
             say(f"⚠️ シャットダウン失敗: {e}")
         return
 
@@ -516,12 +653,13 @@ def handle_command(ack, say, command):
         pcs = cfg.get("pc", {})
 
         if name not in pcs:
+            logger.warning("pc reboot: 未定義ホスト %s", name)
             say(f"`{name}` は config.yaml にありません")
             return
 
         pc = pcs[name]
         ip = pc["ip"]
-
+        logger.info("PC 再起動: %s (%s)", name, ip)
         say(f"{name} を再起動します…")
 
         try:
@@ -535,15 +673,19 @@ def handle_command(ack, say, command):
                 cmd = ["ssh", f'{pc["user"]}@{ip}', "sudo reboot"]
 
             subprocess.run(cmd, timeout=5)
+            logger.info("PC 再起動 完了: %s", name)
             say(f"🔄 {name} を再起動しました")
         except Exception as e:
+            logger.error("PC 再起動 失敗: %s - %s", name, e)
             say(f"⚠️ 再起動失敗: {e}")
         return
 
     # scan
     if text == "scan":
+        logger.info("LAN スキャン 開始: %s", cfg["network"]["cidr"])
         raw = scan_network(cfg["network"]["cidr"])
         devices = parse_arp_scan(raw)
+        logger.info("LAN スキャン 完了: %d 台検出", len(devices))
         table = format_table(devices)
         say(table)
         return
@@ -554,18 +696,22 @@ def handle_command(ack, say, command):
         hosts = cfg.get("hosts", {})
 
         if name not in hosts:
+            logger.warning("wol: 未定義ホスト %s", name)
             say(f"`{name}` は config.yaml にありません")
             return
 
         ip = hosts[name]["ip"]
         mac = hosts[name]["mac"]
 
+        logger.info("WOL 送信: %s mac=%s ip=%s", name, mac, ip)
         say(f"{name} に WOL を送信しました。起動確認中…")
         wol(mac)
 
         if wait_for_ping(ip):
+            logger.info("WOL 成功: %s ping OK", name)
             say(f"🎉 {name} が起動しました（ping 応答あり）")
         else:
+            logger.warning("WOL 失敗: %s ping 応答なし", name)
             say(f"⚠️ {name} は起動しませんでした（ping 応答なし）")
             return
 
@@ -626,6 +772,7 @@ def handle_command(ack, say, command):
         entry["stop"].set()
         del watch_targets[ip]
 
+        logger.info("疎通監視 解除: %s (%s)", entry["name"], ip)
         say(f"🛑 {entry['name']} ({ip}) の監視を解除しました。")
         return
 
@@ -659,8 +806,10 @@ def handle_command(ack, say, command):
 
     close = difflib.get_close_matches(match_text, candidates, n=1, cutoff=0.6)
     if close:
+        logger.debug("不明コマンド: '%s' -> '%s' を提案", text, close[0])
         say(f"`{text}` は不明なコマンドです。`{CMD} {close[0]}` ですか？")
     else:
+        logger.debug("不明コマンド: '%s' (候補なし)", text)
         say(f"不明なコマンドです。`{CMD} help` を実行してください。")
 
 
@@ -755,6 +904,14 @@ def handle_app_home_opened(client, event):
 # メイン
 # -------------------------
 if __name__ == "__main__":
+    logger.info("=" * 50)
+    logger.info("HomeCommander 起動")
+    logger.info("データディレクトリ : %s", DATA_BASE)
+    logger.info("コマンド           : %s", CMD)
+    logger.info("デバッグモード     : %s", args.debug)
+    logger.info("=" * 50)
+
+    inhibitor = start_sleep_inhibitor()
     notify_start()
 
     watcher = threading.Thread(target=timeout_watcher, daemon=True)
@@ -764,5 +921,8 @@ if __name__ == "__main__":
     try:
         handler.start()
     except KeyboardInterrupt:
-        print("\n停止しました。")
+        logger.info("停止シグナル受信。終了します。")
+        if inhibitor:
+            inhibitor.terminate()
+            logger.info("スリープ抑制 解除")
         handler.close()

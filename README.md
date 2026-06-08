@@ -1,6 +1,6 @@
 # HomeCommander (Slack LAN Manager Bot)
 
-Raspberry Pi だけで自宅 LAN を完全管理できる Slack Bot。  
+Raspberry Pi / Ubuntu だけで自宅 LAN を完全管理できる Slack Bot。  
 VPN 不要・ポート開放不要・PC 側設定不要。  
 overlayFS（読み取り専用 root）でも動作し、設定・ログは USB に永続化される。
 
@@ -122,7 +122,7 @@ sh setup.sh
 brew install arp-scan speedtest-cli
 ```
 
-**Raspberry Pi:**
+**Raspberry Pi OS / Ubuntu:**
 ```sh
 sudo apt install arp-scan speedtest-cli samba-common-bin python3-venv python3-dev
 ```

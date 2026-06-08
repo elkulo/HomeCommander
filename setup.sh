@@ -1,6 +1,6 @@
 #!/bin/sh
 # HomeCommander セットアップスクリプト
-# 対応環境: macOS (開発) / Raspberry Pi OS Trixi (本番)
+# 対応環境: macOS (開発) / Raspberry Pi OS Trixi / Ubuntu (本番)
 # 実行: sh setup.sh
 set -eu
 
@@ -116,9 +116,27 @@ printf "> "
 read -r DATA_INPUT
 DATA_DIR="${DATA_INPUT:-$DEFAULT_DATA}"
 
+# スリープ抑制（Linux のみ選択肢を表示）
+PREVENT_SLEEP="false"
+if [ "$OS" = "Linux" ]; then
+    echo ""
+    printf "スリープ抑制を有効にしますか？ (systemd-inhibit) [y/N] > "
+    read -r SLEEP_INPUT
+    SLEEP_INPUT="${SLEEP_INPUT:-N}"
+    if [ "$SLEEP_INPUT" = "y" ] || [ "$SLEEP_INPUT" = "Y" ]; then
+        PREVENT_SLEEP="true"
+        info "スリープ抑制: 有効"
+    else
+        info "スリープ抑制: 無効 (デフォルト)"
+    fi
+fi
+
 # .env に保存
-echo "SLACKBOT_DATA=${DATA_DIR}" > "$SCRIPT_DIR/.env"
-info ".env に保存: SLACKBOT_DATA=${DATA_DIR}"
+{
+    echo "SLACKBOT_DATA=${DATA_DIR}"
+    echo "SLACKBOT_PREVENT_SLEEP=${PREVENT_SLEEP}"
+} > "$SCRIPT_DIR/.env"
+info ".env に保存: SLACKBOT_DATA=${DATA_DIR}, SLACKBOT_PREVENT_SLEEP=${PREVENT_SLEEP}"
 
 # -------------------------
 # データディレクトリ・設定ファイルの作成
@@ -158,6 +176,7 @@ if [ "$OS" = "Linux" ]; then
 
     PYTHON_BIN="$VENV_DIR/bin/python3"
     SERVICE_DEST="/etc/systemd/system/$SERVICE_NAME"
+    SERVICE_USER="$(whoami)"
 
     sudo tee "$SERVICE_DEST" > /dev/null <<EOF
 [Unit]
@@ -167,12 +186,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
+User=$SERVICE_USER
 WorkingDirectory=$SCRIPT_DIR
 ExecStart=$PYTHON_BIN $SCRIPT_DIR/slackbot.py
 Restart=always
 RestartSec=5
 Environment=SLACKBOT_DATA=${DATA_DIR}
+Environment=SLACKBOT_PREVENT_SLEEP=${PREVENT_SLEEP}
 
 [Install]
 WantedBy=multi-user.target
