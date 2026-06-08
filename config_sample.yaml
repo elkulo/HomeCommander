@@ -3,6 +3,12 @@
 # このファイルを config.yaml にコピーして編集してください。
 # ============================================================
 
+bot:
+  # Slack スラッシュコマンド名
+  # Slack アプリ設定の Slash Commands に同じ名前で登録してください
+  # 例: "local" → /local scan, /local wol <name>
+  command: "local"
+
 slack:
   # Slack Bot Token
   # api.slack.com/apps → OAuth & Permissions → Bot User OAuth Token

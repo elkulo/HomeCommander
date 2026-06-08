@@ -66,6 +66,8 @@ def load_config():
 cfg = load_config()
 app = App(token=cfg["slack"]["bot_token"])
 
+CMD = "/" + cfg.get("bot", {}).get("command", "local")
+
 start_time = datetime.now()
 last_activity = datetime.now()
 extend_minutes = 0
@@ -345,27 +347,25 @@ def watch_ip(ip, name, stop_event):
 
 
 # -------------------------
-# Slack メッセージ処理
+# スラッシュコマンド処理
 # -------------------------
-@app.event("message")
-def handle_dm(body, say):
+@app.command(CMD)
+def handle_command(ack, say, command):
     global last_activity, extend_minutes
+
+    # Slack の 3 秒タイムアウト要件を満たすため最初に ack
+    ack()
+
     last_activity = datetime.now()
+    text = command.get("text", "").strip()
+    user_id = command.get("user_id")
 
-    event = body.get("event", {})
-    channel = event.get("channel")
-    text = event.get("text", "").strip()
-    user_id = event.get("user")
-
-    if not channel or not channel.startswith("D"):
-        return
-
-    log_command(user_id, text)
+    log_command(user_id, f"{CMD} {text}")
 
     # help
-    if text == "help":
+    if text in ("", "help"):
         say(
-            "*利用可能なコマンド一覧*\n"
+            f"*利用可能なコマンド一覧* (`{CMD} <サブコマンド>`)\n"
             "```\n"
             "help               : このヘルプを表示\n"
             "status             : Raspberry Pi の状態を表示\n"
@@ -389,7 +389,7 @@ def handle_dm(body, say):
         say(get_status())
         return
 
-    # speedtest
+    # speedtest（時間がかかるが ack() 済みなので OK）
     if text == "speedtest":
         say("回線速度を測定しています…（30秒ほどかかります）")
         result = run_speedtest()
@@ -418,7 +418,7 @@ def handle_dm(body, say):
             extend_minutes += mins
             say(f"⏱️ 無操作シャットダウンを {mins} 分延長しました。（合計 +{extend_minutes} 分）")
         except Exception:
-            say("形式: extend <分>")
+            say(f"形式: `{CMD} extend <分>`")
         return
 
     # Raspberry Pi reboot
@@ -451,7 +451,7 @@ def handle_dm(body, say):
         pcs = cfg.get("pc", {})
 
         if name not in pcs:
-            say(f"{name} は config.yaml にありません")
+            say(f"`{name}` は config.yaml にありません")
             return
 
         pc = pcs[name]
@@ -467,9 +467,7 @@ def handle_dm(body, say):
                     "-U", f'{pc["user"]}%{pc["password"]}'
                 ]
             else:
-                cmd = [
-                    "ssh", f'{pc["user"]}@{ip}', "sudo shutdown -h now"
-                ]
+                cmd = ["ssh", f'{pc["user"]}@{ip}', "sudo shutdown -h now"]
 
             subprocess.run(cmd, timeout=5)
             say(f"🛑 {name} をシャットダウンしました")
@@ -483,7 +481,7 @@ def handle_dm(body, say):
         pcs = cfg.get("pc", {})
 
         if name not in pcs:
-            say(f"{name} は config.yaml にありません")
+            say(f"`{name}` は config.yaml にありません")
             return
 
         pc = pcs[name]
@@ -494,15 +492,12 @@ def handle_dm(body, say):
         try:
             if pc["os"] == "windows":
                 cmd = [
-                    "net", "rpc", "shutdown",
-                    "-r",
+                    "net", "rpc", "shutdown", "-r",
                     "-I", ip,
                     "-U", f'{pc["user"]}%{pc["password"]}'
                 ]
             else:
-                cmd = [
-                    "ssh", f'{pc["user"]}@{ip}', "sudo reboot"
-                ]
+                cmd = ["ssh", f'{pc["user"]}@{ip}', "sudo reboot"]
 
             subprocess.run(cmd, timeout=5)
             say(f"🔄 {name} を再起動しました")
@@ -524,7 +519,7 @@ def handle_dm(body, say):
         hosts = cfg.get("hosts", {})
 
         if name not in hosts:
-            say(f"{name} は config.yaml にありません")
+            say(f"`{name}` は config.yaml にありません")
             return
 
         ip = hosts[name]["ip"]
@@ -589,7 +584,7 @@ def handle_dm(body, say):
                 ip = info["ip"]
 
         if ip not in watch_targets:
-            say(f"{target} は監視されていません。")
+            say(f"`{target}` は監視されていません。")
             return
 
         entry = watch_targets[ip]
@@ -616,12 +611,12 @@ def handle_dm(body, say):
         say(msg)
         return
 
+    # あいまいマッチ
     candidates = [
         "help", "status", "scan", "speedtest", "watchlist", "shutdown", "reboot",
         "wol", "extend", "watch", "unwatch", "pc shutdown", "pc reboot",
     ]
 
-    # "pc xxx" は先頭2単語、それ以外は先頭1単語でマッチング
     if text.startswith("pc "):
         match_text = " ".join(text.split()[:2])
     else:
@@ -629,9 +624,9 @@ def handle_dm(body, say):
 
     close = difflib.get_close_matches(match_text, candidates, n=1, cutoff=0.6)
     if close:
-        say(f"`{text}` は不明なコマンドです。`{close[0]}` ですか？")
+        say(f"`{text}` は不明なコマンドです。`{CMD} {close[0]}` ですか？")
     else:
-        say("不明なコマンドです。`help` を実行してください。")
+        say(f"不明なコマンドです。`{CMD} help` を実行してください。")
 
 
 # -------------------------
@@ -644,7 +639,7 @@ HOME_BLOCKS = [
     },
     {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": "Raspberry Pi LAN 管理ボット\nこのボットに *DM* でコマンドを送信してください。"},
+        "text": {"type": "mrkdwn", "text": f"Raspberry Pi LAN 管理ボット\n`{CMD} <サブコマンド>` で操作します。"},
     },
     {"type": "divider"},
     {
@@ -653,10 +648,10 @@ HOME_BLOCKS = [
             "type": "mrkdwn",
             "text": (
                 "*📡 監視・情報*\n"
-                "```"
-                "status       Raspberry Pi の状態\n"
-                "scan         LAN スキャン（表形式）\n"
-                "speedtest    回線速度測定（履歴付き）"
+                f"```"
+                f"{CMD} status       Raspberry Pi の状態\n"
+                f"{CMD} scan         LAN スキャン（表形式）\n"
+                f"{CMD} speedtest    回線速度測定（履歴付き）"
                 "```"
             ),
         },
@@ -667,10 +662,10 @@ HOME_BLOCKS = [
             "type": "mrkdwn",
             "text": (
                 "*💻 PC 操作*\n"
-                "```"
-                "wol <name>           Wake-on-LAN\n"
-                "pc shutdown <name>   シャットダウン\n"
-                "pc reboot <name>     再起動"
+                f"```"
+                f"{CMD} wol <name>           Wake-on-LAN\n"
+                f"{CMD} pc shutdown <name>   シャットダウン\n"
+                f"{CMD} pc reboot <name>     再起動"
                 "```"
             ),
         },
@@ -681,10 +676,10 @@ HOME_BLOCKS = [
             "type": "mrkdwn",
             "text": (
                 "*👁 疎通監視*\n"
-                "```"
-                "watch <ip>           監視開始\n"
-                "unwatch <ip|name>    監視解除\n"
-                "watchlist            監視中ホスト一覧"
+                f"```"
+                f"{CMD} watch <ip>           監視開始\n"
+                f"{CMD} unwatch <ip|name>    監視解除\n"
+                f"{CMD} watchlist            監視中ホスト一覧"
                 "```"
             ),
         },
@@ -695,10 +690,10 @@ HOME_BLOCKS = [
             "type": "mrkdwn",
             "text": (
                 "*⚙️ システム*\n"
-                "```"
-                "extend <分>   タイムアウト延長\n"
-                "shutdown      Pi シャットダウン\n"
-                "reboot        Pi 再起動"
+                f"```"
+                f"{CMD} extend <分>   タイムアウト延長\n"
+                f"{CMD} shutdown      Pi シャットダウン\n"
+                f"{CMD} reboot        Pi 再起動"
                 "```"
             ),
         },
