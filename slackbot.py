@@ -104,28 +104,29 @@ os.makedirs(LOG_DIR, exist_ok=True)
 # ロギング設定
 # -------------------------
 def setup_logging(log_dir: str, debug: bool = False) -> logging.Logger:
-    level = logging.DEBUG if debug else logging.INFO
-
     formatter = logging.Formatter(
         fmt="%(asctime)s [%(levelname)-8s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
     logger = logging.getLogger("homecommander")
-    logger.setLevel(level)
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
 
-    # ファイルハンドラ（ローテーション: 1MB × 5世代）
+    # ファイルハンドラ: SD カード保護のため常に INFO 以上のみ書き込む
+    # DEBUG ログはコンソールにのみ出力し、ディスク書き込みを抑制する
     fh = RotatingFileHandler(
         f"{log_dir}/slackbot.log",
-        maxBytes=1024 * 1024,
-        backupCount=5,
+        maxBytes=1024 * 1024,  # 1MB
+        backupCount=5,          # 最大 5MB
         encoding="utf-8",
     )
+    fh.setLevel(logging.INFO)   # debug フラグに関わらずファイルは INFO 以上
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-    # コンソールハンドラ
+    # コンソールハンドラ: --debug 時は DEBUG も表示
     ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.DEBUG if debug else logging.INFO)
     ch.setFormatter(formatter)
     logger.addHandler(ch)
 
@@ -165,29 +166,53 @@ watch_targets = {}
 
 # -------------------------
 # speedtest ログ（統計計算用に独立ファイルを維持）
+# ローテーション: 512KB × 3世代（手動実行なので小さめ）
 # -------------------------
+SPEEDTEST_LOG_PATH = f"{LOG_DIR}/speedtest.log"
+
+
 def log_speedtest(result):
-    with open(f"{LOG_DIR}/speedtest.log", "a") as f:
-        f.write(f"{datetime.now()}\n{result}\n\n")
+    # plain open + 手動ローテーション（RotatingFileHandler は LogRecord 前提で使いにくいため）
+    entry = f"{datetime.now()}\n{result}\n\n"
+    with open(SPEEDTEST_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(entry)
+    # 512KB を超えたらローテーション
+    _rotate_speedtest_log(SPEEDTEST_LOG_PATH, max_bytes=512 * 1024, backup_count=3)
+
+
+def _rotate_speedtest_log(path, max_bytes, backup_count):
+    if not os.path.exists(path):
+        return
+    if os.path.getsize(path) < max_bytes:
+        return
+    # .3 → 削除、.2 → .3、.1 → .2、元 → .1
+    for i in range(backup_count - 1, 0, -1):
+        src = f"{path}.{i}"
+        dst = f"{path}.{i + 1}"
+        if os.path.exists(src):
+            os.replace(src, dst)
+    os.replace(path, f"{path}.1")
 
 
 def load_speedtest_history():
-    path = f"{LOG_DIR}/speedtest.log"
-    if not os.path.exists(path):
-        return []
+    # 最新ファイルから順にすべてのローテーション済みファイルも読む
+    paths = [SPEEDTEST_LOG_PATH] + [f"{SPEEDTEST_LOG_PATH}.{i}" for i in range(1, 4)]
 
     results = []
-    with open(path, "r") as f:
-        block = []
-        for line in f:
-            if line.strip() == "":
-                if block:
-                    results.append("\n".join(block))
-                    block = []
-            else:
-                block.append(line.strip())
-        if block:
-            results.append("\n".join(block))
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            block = []
+            for line in f:
+                if line.strip() == "":
+                    if block:
+                        results.append("\n".join(block))
+                        block = []
+                else:
+                    block.append(line.strip())
+            if block:
+                results.append("\n".join(block))
 
     return results
 
@@ -218,14 +243,18 @@ def calc_speedtest_stats():
     if not downloads:
         return None
 
-    return {
+    result = {
         "avg_dl": sum(downloads) / len(downloads),
         "max_dl": max(downloads),
         "min_dl": min(downloads),
-        "avg_ul": sum(uploads) / len(uploads),
-        "max_ul": max(uploads),
-        "min_ul": min(uploads),
     }
+    if uploads:
+        result.update({
+            "avg_ul": sum(uploads) / len(uploads),
+            "max_ul": max(uploads),
+            "min_ul": min(uploads),
+        })
+    return result
 
 
 # -------------------------
@@ -252,20 +281,33 @@ def get_status():
     cpu_temp = get_cpu_temp()
     cpu_usage = psutil.cpu_percent(interval=1)
     mem = psutil.virtual_memory()
-    disk = psutil.disk_usage("/")
+    disk_root = psutil.disk_usage("/")
     uptime_seconds = time.time() - start_time.timestamp()
-    uptime = str(timedelta(seconds=int(uptime_seconds)))
+    hours, rem = divmod(int(uptime_seconds), 3600)
+    minutes, seconds = divmod(rem, 60)
+    uptime = f"{hours}時間{minutes}分{seconds}秒"
 
-    return (
-        "*Raspberry Pi 状況*\n"
-        "```\n"
-        f"CPU温度     : {cpu_temp}\n"
-        f"CPU使用率   : {cpu_usage}%\n"
-        f"メモリ使用率: {mem.percent}%\n"
-        f"ディスク使用: {disk.used // (1024**3)}GB / {disk.total // (1024**3)}GB\n"
-        f"稼働時間    : {uptime}\n"
-        "```"
-    )
+    lines = [
+        "*HomeCommander 状況*",
+        "```",
+        f"CPU温度     : {cpu_temp}",
+        f"CPU使用率   : {cpu_usage}%",
+        f"メモリ使用率: {mem.percent}%",
+        f"ディスク(/) : {disk_root.used // (1024**3)}GB / {disk_root.total // (1024**3)}GB ({disk_root.percent}%)",
+    ]
+
+    # DATA_BASE がルートと別パーティション（USB 等）ならディスク使用量を追加表示
+    try:
+        disk_data = psutil.disk_usage(DATA_BASE)
+        if disk_data.device != disk_root.device if hasattr(disk_data, "device") else disk_data.total != disk_root.total:
+            lines.append(
+                f"ディスク(data): {disk_data.used // (1024**3)}GB / {disk_data.total // (1024**3)}GB ({disk_data.percent}%)"
+            )
+    except Exception:
+        pass
+
+    lines += [f"稼働時間    : {uptime}", "```"]
+    return "\n".join(lines)
 
 
 # -------------------------
@@ -276,7 +318,8 @@ def scan_network(cidr):
     result = subprocess.run(
         ["sudo", "arp-scan", cidr],
         capture_output=True,
-        text=True
+        text=True,
+        timeout=30,
     )
     logger.debug("arp-scan 出力:\n%s", result.stdout)
     return result.stdout
@@ -354,13 +397,17 @@ def run_speedtest():
     try:
         result = subprocess.check_output(
             ["speedtest-cli", "--simple"],
-            stderr=subprocess.STDOUT
+            stderr=subprocess.STDOUT,
+            timeout=120,
         ).decode()
         logger.debug("speedtest 結果:\n%s", result.strip())
         return result
+    except subprocess.TimeoutExpired:
+        logger.error("speedtest タイムアウト (120秒)")
+        return None
     except Exception as e:
         logger.error("speedtest 失敗: %s", e)
-        return f"速度測定エラー: {e}"
+        return None
 
 
 # -------------------------
@@ -404,11 +451,15 @@ def start_sleep_inhibitor():
 # -------------------------
 def notify_start():
     logger.info("起動通知を送信")
-    user = cfg["slack"]["notify_user_id"]
-    app.client.chat_postMessage(
-        channel=user,
-        text=f"Raspberry Pi が起動しました。\n起動時刻: {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
-    )
+    try:
+        user = cfg["slack"]["notify_user_id"]
+        hostname = socket.gethostname()
+        app.client.chat_postMessage(
+            channel=user,
+            text=f"✅ HomeCommander が起動しました。\nホスト: {hostname}\n起動時刻: {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+    except Exception as e:
+        logger.warning("起動通知の送信に失敗しました: %s", e)
 
 
 # -------------------------
@@ -416,7 +467,7 @@ def notify_start():
 # -------------------------
 def timeout_watcher():
     global last_activity, extend_minutes
-    timeout_minutes = cfg["timeout"]["minutes"]
+    timeout_minutes = cfg.get("timeout", {}).get("minutes", 30)
 
     if timeout_minutes == 0:
         logger.info("無操作シャットダウン: 無効 (minutes=0)")
@@ -535,7 +586,7 @@ def handle_command(ack, say, command):
             "wol <name>         : 指定ホストに Wake-on-LAN\n"
             "speedtest          : 回線速度を測定（履歴＋統計）\n"
             "extend <分>        : 無操作シャットダウンを延長\n"
-            "watch <ip>         : 指定IPを疎通監視\n"
+            "watch <ip|name>    : 指定ホストを疎通監視（IP またはホスト名）\n"
             "unwatch <ip|name>  : 監視解除\n"
             "watchlist          : 監視中ホスト一覧\n"
             "pc shutdown <name> : PC をシャットダウン\n"
@@ -556,20 +607,30 @@ def handle_command(ack, say, command):
     if text == "speedtest":
         say("回線速度を測定しています…（30秒ほどかかります）")
         result = run_speedtest()
-        log_speedtest(result)
+
+        if result is None:
+            say("⚠️ 速度測定に失敗しました。ログを確認してください。")
+            return
+
+        log_speedtest(result)  # 成功時のみ記録
         logger.info("speedtest 完了")
         stats = calc_speedtest_stats()
 
         msg = f"```\n{result}\n```"
         if stats:
+            ul_lines = ""
+            if "avg_ul" in stats:
+                ul_lines = (
+                    f"平均UL: {stats['avg_ul']:.2f} Mbps\n"
+                    f"最速UL: {stats['max_ul']:.2f} Mbps\n"
+                    f"最遅UL: {stats['min_ul']:.2f} Mbps\n"
+                )
             msg += (
                 "*【過去の統計】*\n"
                 f"平均DL: {stats['avg_dl']:.2f} Mbps\n"
                 f"最速DL: {stats['max_dl']:.2f} Mbps\n"
                 f"最遅DL: {stats['min_dl']:.2f} Mbps\n"
-                f"平均UL: {stats['avg_ul']:.2f} Mbps\n"
-                f"最速UL: {stats['max_ul']:.2f} Mbps\n"
-                f"最遅UL: {stats['min_ul']:.2f} Mbps\n"
+                + ul_lines
             )
 
         say(msg)
@@ -579,11 +640,14 @@ def handle_command(ack, say, command):
     if text.startswith("extend "):
         try:
             mins = int(text.split(" ", 1)[1])
+            if mins <= 0:
+                say(f"延長時間は 1 以上の整数で指定してください。例: `{CMD} extend 60`")
+                return
             extend_minutes += mins
             logger.info("タイムアウト延長: +%d 分 (合計 +%d 分)", mins, extend_minutes)
             say(f"⏱️ 無操作シャットダウンを {mins} 分延長しました。（合計 +{extend_minutes} 分）")
-        except Exception:
-            say(f"形式: `{CMD} extend <分>`")
+        except ValueError:
+            say(f"形式: `{CMD} extend <分>`  例: `{CMD} extend 60`")
         return
 
     # Raspberry Pi reboot
@@ -726,14 +790,23 @@ def handle_command(ack, say, command):
         say(msg)
         return
 
-    # watch <ip>
+    # watch <ip or name>
     if text.startswith("watch "):
-        ip = text.split(" ", 1)[1].strip()
+        target = text.split(" ", 1)[1].strip()
 
-        name = ip
-        for host_name, info in cfg.get("hosts", {}).items():
-            if info["ip"] == ip:
-                name = host_name
+        # ホスト名で指定された場合は IP に解決
+        hosts = cfg.get("hosts", {})
+        if target in hosts:
+            ip = hosts[target]["ip"]
+            name = target
+        else:
+            ip = target
+            name = ip
+            # IP からホスト名を逆引き
+            for host_name, info in hosts.items():
+                if info["ip"] == ip:
+                    name = host_name
+                    break
 
         if ip in watch_targets:
             say(f"{name} ({ip}) はすでに監視中です。")
@@ -832,10 +905,10 @@ HOME_BLOCKS = [
             "type": "mrkdwn",
             "text": (
                 "*📡 監視・情報*\n"
-                f"```"
-                f"{CMD} status       Raspberry Pi の状態\n"
+                f"```\n"
+                f"{CMD} status       HomeCommander の状態\n"
                 f"{CMD} scan         LAN スキャン（表形式）\n"
-                f"{CMD} speedtest    回線速度測定（履歴付き）"
+                f"{CMD} speedtest    回線速度測定（履歴付き）\n"
                 "```"
             ),
         },
@@ -846,10 +919,10 @@ HOME_BLOCKS = [
             "type": "mrkdwn",
             "text": (
                 "*💻 PC 操作*\n"
-                f"```"
+                f"```\n"
                 f"{CMD} wol <name>           Wake-on-LAN\n"
                 f"{CMD} pc shutdown <name>   シャットダウン\n"
-                f"{CMD} pc reboot <name>     再起動"
+                f"{CMD} pc reboot <name>     再起動\n"
                 "```"
             ),
         },
@@ -860,10 +933,10 @@ HOME_BLOCKS = [
             "type": "mrkdwn",
             "text": (
                 "*👁 疎通監視*\n"
-                f"```"
-                f"{CMD} watch <ip>           監視開始\n"
+                f"```\n"
+                f"{CMD} watch <ip|name>      監視開始\n"
                 f"{CMD} unwatch <ip|name>    監視解除\n"
-                f"{CMD} watchlist            監視中ホスト一覧"
+                f"{CMD} watchlist            監視中ホスト一覧\n"
                 "```"
             ),
         },
@@ -874,10 +947,10 @@ HOME_BLOCKS = [
             "type": "mrkdwn",
             "text": (
                 "*⚙️ システム*\n"
-                f"```"
+                f"```\n"
                 f"{CMD} extend <分>   タイムアウト延長\n"
                 f"{CMD} shutdown      Pi シャットダウン\n"
-                f"{CMD} reboot        Pi 再起動"
+                f"{CMD} reboot        Pi 再起動\n"
                 "```"
             ),
         },
@@ -909,6 +982,16 @@ if __name__ == "__main__":
     logger.info("データディレクトリ : %s", DATA_BASE)
     logger.info("コマンド           : %s", CMD)
     logger.info("デバッグモード     : %s", args.debug)
+    logger.info("ログ書き込み       : %s/slackbot.log (INFO以上のみ)", LOG_DIR)
+    # SD カード保護チェック: データが /mnt 以外の場合は警告
+    if platform.system() == "Linux" and not DATA_BASE.startswith("/mnt"):
+        logger.warning(
+            "データディレクトリが /mnt 配下にありません: %s\n"
+            "  SD カードへのログ書き込みが発生します。\n"
+            "  USB などに移動する場合: setup.sh を再実行するか "
+            "--data /mnt/usbdata/slackbot を指定してください。",
+            DATA_BASE,
+        )
     logger.info("=" * 50)
 
     inhibitor = start_sleep_inhibitor()

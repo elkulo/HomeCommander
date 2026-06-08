@@ -178,11 +178,27 @@ if [ "$OS" = "Linux" ]; then
     SERVICE_DEST="/etc/systemd/system/$SERVICE_NAME"
     SERVICE_USER="$(whoami)"
 
+    # スクリプト本体またはデータディレクトリが /mnt 配下の場合は
+    # USB マウント完了を待つ RequiresMountsFor を追加する
+    REQUIRES_MOUNTS=""
+    AFTER_EXTRA=""
+    for CHECK_PATH in "$SCRIPT_DIR" "$DATA_DIR"; do
+        case "$CHECK_PATH" in
+            /mnt/*)
+                MOUNT_POINT=$(echo "$CHECK_PATH" | cut -d/ -f1-3)  # /mnt/xxx
+                REQUIRES_MOUNTS="RequiresMountsFor=${MOUNT_POINT}"
+                AFTER_EXTRA=" local-fs.target"
+                break
+                ;;
+        esac
+    done
+
     sudo tee "$SERVICE_DEST" > /dev/null <<EOF
 [Unit]
 Description=Slack LAN Manager Bot
-After=network-online.target
+After=network-online.target${AFTER_EXTRA}
 Wants=network-online.target
+${REQUIRES_MOUNTS}
 
 [Service]
 Type=simple
