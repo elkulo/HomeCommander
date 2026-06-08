@@ -26,7 +26,7 @@ echo "OS          : $OS"
 # -------------------------
 step "Python 確認"
 
-if ! command -v python3 &>/dev/null; then
+if ! command -v python3 >/dev/null 2>&1; then
     error "python3 が見つかりません。インストールしてください。"
 fi
 
@@ -45,7 +45,7 @@ info "Python $PYTHON_VER"
 # -------------------------
 if [ "$OS" = "Darwin" ]; then
     step "Mac: システムパッケージ (Homebrew)"
-    if ! command -v brew &>/dev/null; then
+    if ! command -v brew >/dev/null 2>&1; then
         warn "Homebrew が見つかりません。arp-scan / speedtest-cli は手動でインストールしてください。"
         warn "  https://brew.sh"
     else

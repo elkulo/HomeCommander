@@ -17,6 +17,8 @@ from wakeonlan import send_magic_packet
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+VERSION = "1.0.0"
+
 
 # -------------------------
 # CLI 引数パース
@@ -258,7 +260,7 @@ def calc_speedtest_stats():
 
 
 # -------------------------
-# Raspberry Pi 状況監視
+# ホスト状況監視
 # -------------------------
 def get_cpu_temp():
     # Raspberry Pi: vcgencmd measure_temp → "47.2'C"
@@ -288,7 +290,7 @@ def get_status():
     uptime = f"{hours}時間{minutes}分{seconds}秒"
 
     lines = [
-        "*SlackBot 状況*",
+        "*HomeCommander 状況*",
         "```",
         f"CPU温度     : {cpu_temp}",
         f"CPU使用率   : {cpu_usage}%",
@@ -321,6 +323,8 @@ def scan_network(cidr):
         text=True,
         timeout=30,
     )
+    if result.returncode != 0:
+        logger.warning("arp-scan 異常終了 (rc=%d): %s", result.returncode, result.stderr.strip())
     logger.debug("arp-scan 出力:\n%s", result.stdout)
     return result.stdout
 
@@ -456,7 +460,7 @@ def notify_start():
         hostname = socket.gethostname()
         app.client.chat_postMessage(
             channel=user,
-            text=f"✅ SlackBot が起動しました。\nホスト: {hostname}\n起動時刻: {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+            text=f"✅ HomeCommander v{VERSION} が起動しました。\nホスト: {hostname}\n起動時刻: {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
         )
     except Exception as e:
         logger.warning("起動通知の送信に失敗しました: %s", e)
@@ -662,7 +666,7 @@ def handle_command(ack, say, command):
             say(f"形式: `{CMD} extend <分>`  例: `{CMD} extend 60`")
         return
 
-    # Raspberry Pi reboot
+    # reboot
     if text == "reboot":
         if user_id != cfg["slack"]["notify_user_id"]:
             logger.warning("権限エラー: reboot user=%s", user_id)
@@ -676,7 +680,7 @@ def handle_command(ack, say, command):
         threading.Thread(target=_do_reboot, daemon=True).start()
         return
 
-    # Raspberry Pi shutdown
+    # shutdown
     if text == "shutdown":
         if user_id != cfg["slack"]["notify_user_id"]:
             logger.warning("権限エラー: shutdown user=%s", user_id)
@@ -999,7 +1003,7 @@ def handle_app_home_opened(client, event):
 # -------------------------
 if __name__ == "__main__":
     logger.info("=" * 50)
-    logger.info("SlackBot 起動")
+    logger.info("HomeCommander v%s 起動", VERSION)
     logger.info("データディレクトリ : %s", DATA_BASE)
     logger.info("コマンド           : %s", CMD)
     logger.info("デバッグモード     : %s", args.debug)

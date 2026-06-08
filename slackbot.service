@@ -12,12 +12,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=</home/pi/HomeCommander>
-ExecStart=</home/pi/HomeCommander/venv/bin/python3> </home/pi/HomeCommander/slackbot.py> --data /mnt/usbdata/slackbot
+User=<user>
+WorkingDirectory=</path/to/HomeCommander>
+ExecStart=</path/to/HomeCommander/venv/bin/python3> </path/to/HomeCommander/slackbot.py>
 Restart=always
 RestartSec=5
-Environment=SLACKBOT_DATA=/mnt/usbdata/slackbot
+Environment=SLACKBOT_DATA=</path/to/data>
 
 [Install]
 WantedBy=multi-user.target
