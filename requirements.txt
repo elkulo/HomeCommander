@@ -1,0 +1,4 @@
+slack-bolt>=1.18
+psutil>=5.9
+wakeonlan>=2.1
+PyYAML>=6.0

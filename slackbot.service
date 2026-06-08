@@ -1,3 +1,10 @@
+# このファイルは参照用テンプレートです。
+# 実際のサービス登録は setup.sh が自動で行います（パスを埋め込んで上書き生成）。
+# 手動で配置する場合は下記の <...> を実際のパスに置き換えてください。
+#
+# 配置先: /etc/systemd/system/slackbot.service
+# 反映:   sudo systemctl daemon-reload && sudo systemctl enable slackbot.service
+
 [Unit]
 Description=Slack LAN Manager Bot
 After=network-online.target
@@ -6,9 +13,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/slackbot
-ExecStart=/usr/bin/python3 /home/pi/slackbot/bot.py --data /mnt/usbdata/slackbot
+WorkingDirectory=</home/pi/HomeCommander>
+ExecStart=</home/pi/HomeCommander/venv/bin/python3> </home/pi/HomeCommander/slackbot.py> --data /mnt/usbdata/slackbot
 Restart=always
+RestartSec=5
 Environment=SLACKBOT_DATA=/mnt/usbdata/slackbot
 
 [Install]

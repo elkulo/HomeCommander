@@ -5,6 +5,7 @@ import time
 import threading
 import subprocess
 import socket
+import difflib
 from datetime import datetime, timedelta
 
 import psutil
@@ -22,13 +23,24 @@ def resolve_data_path():
     args, _ = parser.parse_known_args()
 
     if args.data:
-        return args.data
+        return os.path.abspath(args.data)
 
     env_path = os.environ.get("SLACKBOT_DATA")
     if env_path:
         return env_path
 
-    return "/mnt/usbdata/slackbot"
+    # .env ファイルから読み込む（setup.sh が生成）
+    dot_env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(dot_env):
+        with open(dot_env) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip() == "SLACKBOT_DATA":
+                        return v.strip()
+
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 DATA_BASE = resolve_data_path()
@@ -166,7 +178,7 @@ def get_status():
 # -------------------------
 def scan_network(cidr):
     result = subprocess.run(
-        ["arp-scan", "-l"],
+        ["sudo", "arp-scan", cidr],
         capture_output=True,
         text=True
     )
@@ -250,7 +262,7 @@ def run_speedtest():
 # 起動通知
 # -------------------------
 def notify_start():
-    user = cfg["slack"]["notify_user"]
+    user = cfg["slack"]["notify_user_id"]
     app.client.chat_postMessage(
         channel=user,
         text=f"Raspberry Pi が起動しました。\n起動時刻: {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
@@ -271,7 +283,7 @@ def timeout_watcher():
 
         if elapsed > timedelta(minutes=total_timeout):
             uptime = now - start_time
-            user = cfg["slack"]["notify_user"]
+            user = cfg["slack"]["notify_user_id"]
 
             app.client.chat_postMessage(
                 channel=user,
@@ -290,7 +302,7 @@ def timeout_watcher():
 # 疎通監視スレッド
 # -------------------------
 def watch_ip(ip, name, stop_event):
-    user = cfg["slack"]["notify_user"]
+    user = cfg["slack"]["notify_user_id"]
     threshold = cfg.get("watch", {}).get("fail_threshold", 3)
     interval = cfg.get("watch", {}).get("interval", 10)
 
@@ -323,9 +335,11 @@ def watch_ip(ip, name, stop_event):
                 )
                 last_state = "offline"
 
-        if ip in watch_targets:
+        try:
             watch_targets[ip]["last_state"] = last_state
             watch_targets[ip]["fail_count"] = fail_count
+        except KeyError:
+            break
 
         stop_event.wait(interval)
 
@@ -413,8 +427,10 @@ def handle_dm(body, say):
             say("権限がありません。")
             return
         say("🔄 再起動します。5秒後に実行します。")
-        time.sleep(5)
-        subprocess.run(["sudo", "reboot"])
+        def _do_reboot():
+            time.sleep(5)
+            subprocess.run(["sudo", "reboot"])
+        threading.Thread(target=_do_reboot, daemon=True).start()
         return
 
     # Raspberry Pi shutdown
@@ -423,8 +439,10 @@ def handle_dm(body, say):
             say("権限がありません。")
             return
         say("⚠️ シャットダウンします。5秒後に実行します。")
-        time.sleep(5)
-        subprocess.run(["sudo", "shutdown", "-h", "now"])
+        def _do_shutdown():
+            time.sleep(5)
+            subprocess.run(["sudo", "shutdown", "-h", "now"])
+        threading.Thread(target=_do_shutdown, daemon=True).start()
         return
 
     # pc shutdown
@@ -491,8 +509,8 @@ def handle_dm(body, say):
         except Exception as e:
             say(f"⚠️ 再起動失敗: {e}")
         return
-    
-# scan
+
+    # scan
     if text == "scan":
         raw = scan_network(cfg["network"]["cidr"])
         devices = parse_arp_scan(raw)
@@ -598,7 +616,109 @@ def handle_dm(body, say):
         say(msg)
         return
 
-    say("不明なコマンドです。`help` を実行してください。")
+    candidates = [
+        "help", "status", "scan", "speedtest", "watchlist", "shutdown", "reboot",
+        "wol", "extend", "watch", "unwatch", "pc shutdown", "pc reboot",
+    ]
+
+    # "pc xxx" は先頭2単語、それ以外は先頭1単語でマッチング
+    if text.startswith("pc "):
+        match_text = " ".join(text.split()[:2])
+    else:
+        match_text = text.split()[0] if text.split() else text
+
+    close = difflib.get_close_matches(match_text, candidates, n=1, cutoff=0.6)
+    if close:
+        say(f"`{text}` は不明なコマンドです。`{close[0]}` ですか？")
+    else:
+        say("不明なコマンドです。`help` を実行してください。")
+
+
+# -------------------------
+# App Home タブ
+# -------------------------
+HOME_BLOCKS = [
+    {
+        "type": "header",
+        "text": {"type": "plain_text", "text": "🏠 HomeCommander"},
+    },
+    {
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": "Raspberry Pi LAN 管理ボット\nこのボットに *DM* でコマンドを送信してください。"},
+    },
+    {"type": "divider"},
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": (
+                "*📡 監視・情報*\n"
+                "```"
+                "status       Raspberry Pi の状態\n"
+                "scan         LAN スキャン（表形式）\n"
+                "speedtest    回線速度測定（履歴付き）"
+                "```"
+            ),
+        },
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": (
+                "*💻 PC 操作*\n"
+                "```"
+                "wol <name>           Wake-on-LAN\n"
+                "pc shutdown <name>   シャットダウン\n"
+                "pc reboot <name>     再起動"
+                "```"
+            ),
+        },
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": (
+                "*👁 疎通監視*\n"
+                "```"
+                "watch <ip>           監視開始\n"
+                "unwatch <ip|name>    監視解除\n"
+                "watchlist            監視中ホスト一覧"
+                "```"
+            ),
+        },
+    },
+    {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": (
+                "*⚙️ システム*\n"
+                "```"
+                "extend <分>   タイムアウト延長\n"
+                "shutdown      Pi シャットダウン\n"
+                "reboot        Pi 再起動"
+                "```"
+            ),
+        },
+    },
+    {"type": "divider"},
+    {
+        "type": "context",
+        "elements": [
+            {"type": "mrkdwn", "text": "不明なコマンドはあいまいマッチで候補を提示します。"},
+        ],
+    },
+]
+
+
+@app.event("app_home_opened")
+def handle_app_home_opened(client, event):
+    client.views_publish(
+        user_id=event["user"],
+        view={"type": "home", "blocks": HOME_BLOCKS},
+    )
 
 
 # -------------------------
@@ -611,4 +731,8 @@ if __name__ == "__main__":
     watcher.start()
 
     handler = SocketModeHandler(app, cfg["slack"]["app_token"])
-    handler.start()
+    try:
+        handler.start()
+    except KeyboardInterrupt:
+        print("\n停止しました。")
+        handler.close()
