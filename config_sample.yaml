@@ -1,0 +1,32 @@
+slack:
+  bot_token: "xoxb-***"
+  app_token: "xapp-***"
+  notify_user: "@your_user_id"
+  notify_user_id: "U12345678"
+
+network:
+  cidr: "192.168.1.0/24"
+
+hosts:
+  desktop:
+    ip: "192.168.1.20"
+    mac: "11:22:33:44:55:66"
+
+ports:
+  ssh: 22
+  rdp: 3389
+  smb: 445
+
+pc:
+  desktop:
+    ip: "192.168.1.20"
+    os: "windows"
+    user: "your_user"
+    password: "your_password"
+
+timeout:
+  minutes: 30
+
+watch:
+  fail_threshold: 3
+  interval: 10

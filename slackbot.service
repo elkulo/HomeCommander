@@ -1,0 +1,15 @@
+[Unit]
+Description=Slack LAN Manager Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/slackbot
+ExecStart=/usr/bin/python3 /home/pi/slackbot/bot.py --data /mnt/usbdata/slackbot
+Restart=always
+Environment=SLACKBOT_DATA=/mnt/usbdata/slackbot
+
+[Install]
+WantedBy=multi-user.target
