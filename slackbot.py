@@ -9,6 +9,7 @@ import threading
 import subprocess
 import socket
 import difflib
+import fcntl
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
@@ -17,7 +18,7 @@ from wakeonlan import send_magic_packet
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 # -------------------------
@@ -412,6 +413,31 @@ def run_speedtest():
     except Exception as e:
         logger.error("speedtest 失敗: %s", e)
         return None
+
+
+# -------------------------
+# 二重起動防止（ファイルロック）
+# -------------------------
+_lock_file = None  # GC で閉じられないようにモジュールレベルで保持
+
+
+def acquire_instance_lock():
+    """
+    ロックファイルを排他的に取得する。
+    別インスタンスがすでに起動中なら SystemExit で終了。
+    プロセス終了時（クラッシュ含む）に OS がロックを自動解放する。
+    """
+    global _lock_file
+    lock_path = os.path.join(DATA_BASE, ".slackbot.lock")
+    _lock_file = open(lock_path, "w")
+    try:
+        fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_file.write(str(os.getpid()))
+        _lock_file.flush()
+    except BlockingIOError:
+        _lock_file.close()
+        print(f"[ERROR] HomeCommander はすでに起動中です。({lock_path})", file=sys.stderr)
+        sys.exit(1)
 
 
 # -------------------------
@@ -1002,6 +1028,8 @@ def handle_app_home_opened(client, event):
 # メイン
 # -------------------------
 if __name__ == "__main__":
+    acquire_instance_lock()
+
     logger.info("=" * 50)
     logger.info("HomeCommander v%s 起動", VERSION)
     logger.info("データディレクトリ : %s", DATA_BASE)

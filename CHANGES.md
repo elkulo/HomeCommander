@@ -1,5 +1,43 @@
 # CHANGES
 
+## v1.1.0 (2026-06-09)
+
+### 新機能
+
+- **二重起動防止**: `fcntl` によるファイルロックを追加。同一ホストで複数インスタンスが起動しようとすると即座にエラー終了する。クラッシュ後も OS がロックを自動解放するため手動削除不要
+
+### バグ修正
+
+- `calc_speedtest_stats()`: アップロード結果が空のとき ZeroDivisionError が発生する問題を修正
+- `notify_start()`: Slack API 失敗時（起動直後のネットワーク未接続など）に例外が伝播して起動クラッシュする問題を修正
+- `timeout_watcher()`: `chat_postMessage` 失敗時に `shutdown` が実行されない問題を修正
+- `watch_ip()`: `chat_postMessage` 失敗時に監視スレッドが無言で終了する問題を修正
+- `get_status()`: `psutil.disk_usage()` に `device` 属性が存在しないため別パーティション判定が常に誤動作していた問題を修正（`os.stat().st_dev` に変更）
+- `speedtest`: エラー時の文字列が `speedtest.log` に書き込まれ、次回の統計計算でパース失敗する問題を修正
+- `run_speedtest()`: ハング時にスレッドが詰まる問題を修正（タイムアウト 120 秒を追加）
+- `scan_network()`: ハング時にブロックする問題を修正（タイムアウト 30 秒を追加）
+- `scan` コマンド: `arp-scan` 失敗・タイムアウト時の例外が握りつぶされていた問題を修正
+- `wol` コマンド: ホスト名の末尾スペースでホスト名不一致になる問題を修正（`.strip()` 追加）
+- `timeout_watcher()`: `cfg["timeout"]["minutes"]` のキー直アクセスを `.get()` に変更（`timeout` セクション未定義時の KeyError を修正）
+- `extend` コマンド: 0 以下の値を受け付けてタイムアウトが意図せず縮む問題を修正
+- `setup.sh`: `&>/dev/null` を `>/dev/null 2>&1` に変更（POSIX sh 非互換構文の修正）
+
+### 改善
+
+- `watch` コマンド: IP アドレスに加えてホスト名での監視開始に対応
+- `pc shutdown/reboot`: サブプロセスのタイムアウトを 5 秒 → 15 秒に延長（SSH/RPC の応答時間を考慮）
+- `scan_network()`: `arp-scan` が異常終了した場合に stderr を WARNING ログに出力
+- `get_status()`: DATA_BASE が別パーティション（USB など）の場合にそのディスク使用量も追加表示
+- `get_status()`: 稼働時間の表示形式を `H:MM:SS` から `X時間Y分Z秒` に変更
+- `timeout_watcher()`: 起動通知・シャットダウン通知の稼働時間表示を `X時間Y分Z秒` 形式に統一
+- `notify_start()`: 起動通知にホスト名を追加
+- ログ: ファイルハンドラを常に INFO 以上に固定（`--debug` 時もディスク書き込みを抑制）
+- `speedtest.log`: ローテーションを追加（512KB × 3世代）
+- Linux 起動時: DATA_BASE が `/mnt` 配下でない場合に SD カード書き込みの警告を表示
+- 各所の "Raspberry Pi" 固定文言をホスト汎用表現に変更
+
+---
+
 ## v1.0.0 (2026-06-09)
 
 初回リリース。
