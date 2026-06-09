@@ -196,7 +196,7 @@ App Home タブにコマンド一覧が表示されます。
 | `/local scan` | LAN をスキャンして表形式で表示 |
 | `/local wol <name>` | 指定ホストに Wake-on-LAN（起動確認＋ポート確認） |
 | `/local speedtest` | 回線速度を測定（履歴・統計付き） |
-| `/local extend <分>` | 無操作シャットダウンタイマーを延長 |
+| `/local extend <分>` | 自動シャットダウンまでの時間を設定（上書き）。`0` で無効化、再度正の値で再有効化 |
 | `/local watch <ip\|name>` | 指定ホストの疎通監視を開始（IP またはホスト名） |
 | `/local unwatch <ip\|name>` | 監視解除 |
 | `/local watchlist` | 監視中ホスト一覧 |
@@ -235,10 +235,14 @@ App Home タブにコマンド一覧が表示されます。
 `timeout.minutes` で設定した時間 Slack 操作がなければ自動シャットダウンします。
 
 ```
-/local extend 60           # +60分延長
+/local extend 60    # 60分後にシャットダウン（上書き設定）
+/local extend 0     # このセッション中のみ無効化
+/local extend 30    # 無効化中に実行 → 再有効化して30分後にシャットダウン
 ```
 
-`timeout.minutes: 0` で自動シャットダウンを無効化できます（手動 `shutdown` のみ有効）。
+- `extend` は加算ではなく**上書き**。何度でも変更できる
+- `extend 0` は起動中のみ有効。再起動すると `timeout.minutes` の設定値に戻る
+- `timeout.minutes: 0` で恒久的に無効化（手動 `shutdown` のみ）
 
 ---
 

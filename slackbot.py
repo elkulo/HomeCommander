@@ -18,7 +18,7 @@ from wakeonlan import send_magic_packet
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 # -------------------------
@@ -164,6 +164,7 @@ CMD = "/" + cfg.get("bot", {}).get("command", "local")
 start_time = datetime.now()
 last_activity = datetime.now()
 extend_minutes = 0
+timeout_disabled = False  # extend 0 でセッション中の自動シャットダウンを一時無効化
 watch_targets = {}
 
 
@@ -496,7 +497,7 @@ def notify_start():
 # 無操作シャットダウン監視（延長対応）
 # -------------------------
 def timeout_watcher():
-    global last_activity, extend_minutes
+    global last_activity, extend_minutes, timeout_disabled
     timeout_minutes = cfg.get("timeout", {}).get("minutes", 30)
 
     if timeout_minutes == 0:
@@ -506,6 +507,10 @@ def timeout_watcher():
     logger.info("無操作シャットダウン監視 開始 (タイムアウト: %d 分)", timeout_minutes)
 
     while True:
+        if timeout_disabled:
+            time.sleep(60)
+            continue
+
         now = datetime.now()
         elapsed = now - last_activity
         total_timeout = timeout_minutes + extend_minutes
@@ -627,7 +632,7 @@ def handle_command(ack, say, command):
             "scan               : LAN をスキャンして表形式で表示\n"
             "wol <name>         : 指定ホストに Wake-on-LAN\n"
             "speedtest          : 回線速度を測定（履歴＋統計）\n"
-            "extend <分>        : 無操作シャットダウンを延長\n"
+            "extend <分>        : 自動シャットダウンまでの時間を設定（0 で無効化）\n"
             "watch <ip|name>    : 指定ホストを疎通監視（IP またはホスト名）\n"
             "unwatch <ip|name>  : 監視解除\n"
             "watchlist          : 監視中ホスト一覧\n"
@@ -682,14 +687,30 @@ def handle_command(ack, say, command):
     if text.startswith("extend "):
         try:
             mins = int(text.split(" ", 1)[1])
-            if mins <= 0:
-                say(f"延長時間は 1 以上の整数で指定してください。例: `{CMD} extend 60`")
+            if mins < 0:
+                say(f"形式: `{CMD} extend <分>`  例: `{CMD} extend 60` / 無効化: `{CMD} extend 0`")
                 return
-            extend_minutes += mins
-            logger.info("タイムアウト延長: +%d 分 (合計 +%d 分)", mins, extend_minutes)
-            say(f"⏱️ 無操作シャットダウンを {mins} 分延長しました。（合計 +{extend_minutes} 分）")
+            if mins == 0:
+                # 無効化 or すでに無効化済み
+                if timeout_disabled:
+                    say("⏸️ 自動シャットダウンはすでに無効化されています。")
+                else:
+                    timeout_disabled = True
+                    logger.info("自動シャットダウン 無効化 (セッション中のみ)")
+                    say(f"⏸️ 自動シャットダウンを無効化しました。（この起動中のみ）\n再有効化: `{CMD} extend <分>`")
+            else:
+                # 有効化 or 延長
+                if timeout_disabled:
+                    timeout_disabled = False
+                    extend_minutes = mins
+                    logger.info("自動シャットダウン 再有効化: %d 分", mins)
+                    say(f"▶️ 自動シャットダウンを再有効化しました。（{mins} 分後）")
+                else:
+                    extend_minutes = mins
+                    logger.info("タイムアウト延長: %d 分に設定", mins)
+                    say(f"⏱️ 無操作シャットダウンを {mins} 分後に設定しました。")
         except ValueError:
-            say(f"形式: `{CMD} extend <分>`  例: `{CMD} extend 60`")
+            say(f"形式: `{CMD} extend <分>`  例: `{CMD} extend 60` / 無効化: `{CMD} extend 0`")
         return
 
     # reboot
@@ -999,7 +1020,7 @@ HOME_BLOCKS = [
             "text": (
                 "*⚙️ システム*\n"
                 f"```\n"
-                f"{CMD} extend <分>   タイムアウト延長\n"
+                f"{CMD} extend <分>   シャットダウン時間を設定（0 で無効化）\n"
                 f"{CMD} shutdown      ホストシャットダウン\n"
                 f"{CMD} reboot        ホスト再起動\n"
                 "```"
