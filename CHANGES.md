@@ -1,5 +1,17 @@
 # CHANGES
 
+## v2.0.1 (2026-06-11)
+
+### バグ修正
+
+- `shutdown`/`reboot`: `os` 設定済みホストで `user`/`password`（windowsの場合）が未設定の場合に `KeyError` で分かりにくいエラーになっていた問題を修正し、設定不備として明示的にメッセージを返すように変更
+
+### ドキュメント
+
+- `config_sample.yaml`: SSH(`os: linux/macos`)では `password` が使われない（鍵認証のみ対応）ことを明記
+
+---
+
 ## v2.0.0 (2026-06-11)
 
 ### 破壊的変更

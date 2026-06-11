@@ -49,7 +49,7 @@ hosts:
     mac: "11:22:33:44:55:66"    # WOL/watch 用（任意。コロン区切り or ハイフン区切りどちらも可）
     os: "windows"                # shutdown/reboot 用（任意）"windows"（net rpc）または "linux" / "macos"（SSH）
     user: "your_user"            # shutdown/reboot 用アカウント（推奨: 普段使いのログインとは別の管理用アカウント）
-    password: "your_password"    # 平文保存されるため注意
+    password: "your_password"    # net rpc 認証用（平文保存されるため注意）。SSH(linux/macos)では未使用
 
   # nas:
   #   ip: "192.168.1.30"
@@ -58,8 +58,7 @@ hosts:
   # linux-server:
   #   ip: "192.168.1.50"
   #   os: "linux"
-  #   user: "pi"
-  #   password: ""               # SSH 鍵認証の場合は空欄でも可
+  #   user: "pi"                 # SSH 鍵認証のみ対応（password は不要）
 
 # ============================================================
 # WOL 後のポート確認対象（wol コマンドで起動確認後に表示）

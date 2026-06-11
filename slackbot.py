@@ -18,7 +18,7 @@ from wakeonlan import send_magic_packet
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 
 # -------------------------
@@ -659,6 +659,15 @@ def handle_power_command(name, action, say, user_id):
         return
 
     ip = host["ip"]
+
+    if host["os"] == "windows":
+        if "user" not in host or "password" not in host:
+            say(f"⚠️ `{name}` の設定に user/password がありません（os: windows には必須）")
+            return
+    elif "user" not in host:
+        say(f"⚠️ `{name}` の設定に user がありません（SSH には必須）")
+        return
+
     logger.info("%s: %s (%s)", action, name, ip)
     say(f"{name} を{a['verb']}します…")
 
