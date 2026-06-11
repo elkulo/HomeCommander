@@ -1,5 +1,35 @@
 # CHANGES
 
+## v2.0.0 (2026-06-11)
+
+### 破壊的変更
+
+- **`config.yaml` の `hosts` / `pc` セクションを `hosts` に統合**
+  - `pc` セクションを廃止。`os` / `user` / `password` は `hosts` の各ホストに統合
+  - 自ホスト（Bot 動作ホスト）は `hosts` に `self: true` を指定して登録する
+  - 既存の `config.yaml` は手動でのマイグレーションが必要
+
+### コマンド変更
+
+- **`shutdown` / `reboot` を `<name>` 必須に変更し、`pc shutdown` / `pc reboot` と統合**
+  - `/local shutdown <name>` / `/local reboot <name>` に一本化
+  - `hosts` の `self: true` ホスト → ローカルで `sudo shutdown` / `sudo reboot` を実行
+  - `os` 設定済みのリモートホスト → SSH / `net rpc` で実行
+  - いずれの設定も無いホストは「対応していません」と返答
+  - 引数なしの `shutdown` / `reboot` は廃止（誤操作で自ホストを止めてしまうことを防止するため `<name>` を必須化）
+  - `pc shutdown` / `pc reboot` の権限チェックを `notify_user_id` のみに統一（従来は権限チェック無し）
+  - `watch` 中のホストに対する `shutdown`/`reboot` を拒否し、警告を返すように変更（オフライン誤通知を防止）
+
+### バグ修正
+
+- `wol` コマンド: `hosts` に `mac` が未設定のホストを指定すると KeyError でクラッシュする問題を修正
+
+### 改善
+
+- ログ出力: `[INFO    ]` のような levelname のパディングを廃止し `[INFO]` のように詰めて表示
+
+---
+
 ## v1.2.0 (2026-06-09)
 
 ### 新機能

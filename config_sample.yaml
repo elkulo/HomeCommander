@@ -36,17 +36,30 @@ network:
   cidr: "192.168.1.0/24"
 
 # ============================================================
-# WOL 対象ホスト（wol コマンド・watch コマンドの名前解決）
-# 複数追加可能
+# ホスト定義（wol / watch / shutdown / reboot コマンドの名前解決）
+# 複数追加可能。フィールドは用途に応じて任意（不要なら省略可）
 # ============================================================
 hosts:
-  desktop:                      # wol desktop / watch desktop などで使う名前
+  raspberrypi:                  # この Bot が動作しているホスト
+    ip: "192.168.1.10"
+    self: true                  # shutdown/reboot をローカルで実行する
+
+  desktop:                       # wol desktop / watch desktop / shutdown desktop などで使う名前
     ip: "192.168.1.20"
-    mac: "11:22:33:44:55:66"   # コロン区切り or ハイフン区切りどちらも可
+    mac: "11:22:33:44:55:66"    # WOL/watch 用（任意。コロン区切り or ハイフン区切りどちらも可）
+    os: "windows"                # shutdown/reboot 用（任意）"windows"（net rpc）または "linux" / "macos"（SSH）
+    user: "your_user"            # shutdown/reboot 用アカウント（推奨: 普段使いのログインとは別の管理用アカウント）
+    password: "your_password"    # 平文保存されるため注意
 
   # nas:
   #   ip: "192.168.1.30"
-  #   mac: "AA:BB:CC:DD:EE:FF"
+  #   mac: "AA:BB:CC:DD:EE:FF"   # wol/watch のみ（os 未設定のため shutdown/reboot 非対応）
+
+  # linux-server:
+  #   ip: "192.168.1.50"
+  #   os: "linux"
+  #   user: "pi"
+  #   password: ""               # SSH 鍵認証の場合は空欄でも可
 
 # ============================================================
 # WOL 後のポート確認対象（wol コマンドで起動確認後に表示）
@@ -55,23 +68,6 @@ ports:
   ssh: 22
   rdp: 3389
   smb: 445
-
-# ============================================================
-# PC 操作対象（pc shutdown / pc reboot コマンド）
-# 複数追加可能
-# ============================================================
-pc:
-  desktop:                  # pc shutdown desktop / pc reboot desktop で使う名前
-    ip: "192.168.1.20"
-    os: "windows"           # "windows"（net rpc）または "linux" / "macos"（SSH）
-    user: "your_user"
-    password: "your_password"
-
-  # linux-server:
-  #   ip: "192.168.1.50"
-  #   os: "linux"
-  #   user: "pi"
-  #   password: ""          # SSH 鍵認証の場合は空欄でも可
 
 # ============================================================
 # 無操作シャットダウン
