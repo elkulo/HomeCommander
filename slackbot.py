@@ -18,7 +18,7 @@ from wakeonlan import send_magic_packet
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-VERSION = "1.2.0"
+VERSION = "2.0.1"
 
 
 # -------------------------
@@ -108,7 +108,7 @@ os.makedirs(LOG_DIR, exist_ok=True)
 # -------------------------
 def setup_logging(log_dir: str, debug: bool = False) -> logging.Logger:
     formatter = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)-8s] %(message)s",
+        fmt="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
@@ -600,6 +600,96 @@ def watch_ip(ip, name, stop_event):
 
 
 # -------------------------
+# 電源操作（shutdown / reboot）
+# -------------------------
+POWER_ACTIONS = {
+    "shutdown": {
+        "verb": "シャットダウン",
+        "emoji_progress": "⚠️",
+        "emoji_done": "🛑",
+        "local_cmd": ["sudo", "shutdown", "-h", "now"],
+        "remote_cmd": "sudo shutdown -h now",
+        "rpc_args": [],
+    },
+    "reboot": {
+        "verb": "再起動",
+        "emoji_progress": "🔄",
+        "emoji_done": "🔄",
+        "local_cmd": ["sudo", "reboot"],
+        "remote_cmd": "sudo reboot",
+        "rpc_args": ["-r"],
+    },
+}
+
+
+def handle_power_command(name, action, say, user_id):
+    a = POWER_ACTIONS[action]
+    hosts = cfg.get("hosts", {})
+
+    if name not in hosts:
+        logger.warning("%s: 未定義ホスト %s", action, name)
+        say(f"`{name}` は config.yaml にありません")
+        return
+
+    if user_id != cfg["slack"]["notify_user_id"]:
+        logger.warning("権限エラー: %s %s user=%s", action, name, user_id)
+        say("権限がありません。")
+        return
+
+    host = hosts[name]
+
+    if host["ip"] in watch_targets:
+        say(f"⚠️ `{name}` は監視中です。{a['verb']}する前に `{CMD} unwatch {name}` してください。")
+        return
+
+    # 自ホスト: ローカルで実行
+    if host.get("self"):
+        logger.warning("ホスト%s 実行: %s user=%s", a["verb"], name, user_id)
+        say(f"{a['emoji_progress']} {name} を{a['verb']}します。5秒後に実行します。")
+
+        def _do():
+            time.sleep(5)
+            subprocess.run(a["local_cmd"])
+        threading.Thread(target=_do, daemon=True).start()
+        return
+
+    # リモートホスト: SSH / net rpc
+    if "os" not in host:
+        say(f"⚠️ `{name}` は shutdown/reboot に対応していません")
+        return
+
+    ip = host["ip"]
+
+    if host["os"] == "windows":
+        if "user" not in host or "password" not in host:
+            say(f"⚠️ `{name}` の設定に user/password がありません（os: windows には必須）")
+            return
+    elif "user" not in host:
+        say(f"⚠️ `{name}` の設定に user がありません（SSH には必須）")
+        return
+
+    logger.info("%s: %s (%s)", action, name, ip)
+    say(f"{name} を{a['verb']}します…")
+
+    try:
+        if host["os"] == "windows":
+            cmd = [
+                "net", "rpc", "shutdown", *a["rpc_args"],
+                "-I", ip,
+                "-U", f'{host["user"]}%{host["password"]}'
+            ]
+        else:
+            cmd = ["ssh", f'{host["user"]}@{ip}', a["remote_cmd"]]
+
+        subprocess.run(cmd, timeout=15)
+        logger.info("%s 完了: %s", action, name)
+        say(f"{a['emoji_done']} {name} を{a['verb']}しました")
+    except Exception as e:
+        logger.error("%s 失敗: %s - %s", action, name, e)
+        say(f"⚠️ {a['verb']}失敗: {e}")
+
+
+# -------------------------
 # message イベントの未処理警告を抑制
 # -------------------------
 @app.event("message")
@@ -636,10 +726,8 @@ def handle_command(ack, say, command):
             "watch <ip|name>    : 指定ホストを疎通監視（IP またはホスト名）\n"
             "unwatch <ip|name>  : 監視解除\n"
             "watchlist          : 監視中ホスト一覧\n"
-            "pc shutdown <name> : PC をシャットダウン\n"
-            "pc reboot <name>   : PC を再起動\n"
-            "shutdown           : ホストをシャットダウン\n"
-            "reboot             : ホストを再起動\n"
+            "shutdown <name>    : 指定ホストをシャットダウン（自ホスト含む）\n"
+            "reboot <name>      : 指定ホストを再起動（自ホスト含む）\n"
             "```"
         )
         return
@@ -713,98 +801,24 @@ def handle_command(ack, say, command):
             say(f"形式: `{CMD} extend <分>`  例: `{CMD} extend 60` / 無効化: `{CMD} extend 0`")
         return
 
-    # reboot
-    if text == "reboot":
-        if user_id != cfg["slack"]["notify_user_id"]:
-            logger.warning("権限エラー: reboot user=%s", user_id)
-            say("権限がありません。")
-            return
-        logger.warning("ホスト再起動 実行 user=%s", user_id)
-        say("🔄 再起動します。5秒後に実行します。")
-        def _do_reboot():
-            time.sleep(5)
-            subprocess.run(["sudo", "reboot"])
-        threading.Thread(target=_do_reboot, daemon=True).start()
+    # shutdown <name>
+    if text.startswith("shutdown "):
+        name = text.split(" ", 1)[1].strip()
+        handle_power_command(name, "shutdown", say, user_id)
         return
 
-    # shutdown
     if text == "shutdown":
-        if user_id != cfg["slack"]["notify_user_id"]:
-            logger.warning("権限エラー: shutdown user=%s", user_id)
-            say("権限がありません。")
-            return
-        logger.warning("ホストシャットダウン 実行 user=%s", user_id)
-        say("⚠️ シャットダウンします。5秒後に実行します。")
-        def _do_shutdown():
-            time.sleep(5)
-            subprocess.run(["sudo", "shutdown", "-h", "now"])
-        threading.Thread(target=_do_shutdown, daemon=True).start()
+        say(f"形式: `{CMD} shutdown <name>`")
         return
 
-    # pc shutdown
-    if text.startswith("pc shutdown "):
-        name = text.split(" ", 2)[2]
-        pcs = cfg.get("pc", {})
-
-        if name not in pcs:
-            logger.warning("pc shutdown: 未定義ホスト %s", name)
-            say(f"`{name}` は config.yaml にありません")
-            return
-
-        pc = pcs[name]
-        ip = pc["ip"]
-        logger.info("PC シャットダウン: %s (%s)", name, ip)
-        say(f"{name} をシャットダウンします…")
-
-        try:
-            if pc["os"] == "windows":
-                cmd = [
-                    "net", "rpc", "shutdown",
-                    "-I", ip,
-                    "-U", f'{pc["user"]}%{pc["password"]}'
-                ]
-            else:
-                cmd = ["ssh", f'{pc["user"]}@{ip}', "sudo shutdown -h now"]
-
-            subprocess.run(cmd, timeout=15)
-            logger.info("PC シャットダウン 完了: %s", name)
-            say(f"🛑 {name} をシャットダウンしました")
-        except Exception as e:
-            logger.error("PC シャットダウン 失敗: %s - %s", name, e)
-            say(f"⚠️ シャットダウン失敗: {e}")
+    # reboot <name>
+    if text.startswith("reboot "):
+        name = text.split(" ", 1)[1].strip()
+        handle_power_command(name, "reboot", say, user_id)
         return
 
-    # pc reboot
-    if text.startswith("pc reboot "):
-        name = text.split(" ", 2)[2]
-        pcs = cfg.get("pc", {})
-
-        if name not in pcs:
-            logger.warning("pc reboot: 未定義ホスト %s", name)
-            say(f"`{name}` は config.yaml にありません")
-            return
-
-        pc = pcs[name]
-        ip = pc["ip"]
-        logger.info("PC 再起動: %s (%s)", name, ip)
-        say(f"{name} を再起動します…")
-
-        try:
-            if pc["os"] == "windows":
-                cmd = [
-                    "net", "rpc", "shutdown", "-r",
-                    "-I", ip,
-                    "-U", f'{pc["user"]}%{pc["password"]}'
-                ]
-            else:
-                cmd = ["ssh", f'{pc["user"]}@{ip}', "sudo reboot"]
-
-            subprocess.run(cmd, timeout=15)
-            logger.info("PC 再起動 完了: %s", name)
-            say(f"🔄 {name} を再起動しました")
-        except Exception as e:
-            logger.error("PC 再起動 失敗: %s - %s", name, e)
-            say(f"⚠️ 再起動失敗: {e}")
+    if text == "reboot":
+        say(f"形式: `{CMD} reboot <name>`")
         return
 
     # scan
@@ -834,6 +848,11 @@ def handle_command(ack, say, command):
         if name not in hosts:
             logger.warning("wol: 未定義ホスト %s", name)
             say(f"`{name}` は config.yaml にありません")
+            return
+
+        if "mac" not in hosts[name]:
+            logger.warning("wol: %s に mac が未設定です", name)
+            say(f"`{name}` は wol に対応していません（mac 未設定）")
             return
 
         ip = hosts[name]["ip"]
@@ -941,13 +960,10 @@ def handle_command(ack, say, command):
     # あいまいマッチ
     candidates = [
         "help", "status", "scan", "speedtest", "watchlist", "shutdown", "reboot",
-        "wol", "extend", "watch", "unwatch", "pc shutdown", "pc reboot",
+        "wol", "extend", "watch", "unwatch",
     ]
 
-    if text.startswith("pc "):
-        match_text = " ".join(text.split()[:2])
-    else:
-        match_text = text.split()[0] if text.split() else text
+    match_text = text.split()[0] if text.split() else text
 
     close = difflib.get_close_matches(match_text, candidates, n=1, cutoff=0.6)
     if close:
@@ -990,11 +1006,11 @@ HOME_BLOCKS = [
         "text": {
             "type": "mrkdwn",
             "text": (
-                "*💻 PC 操作*\n"
+                "*💻 電源操作*\n"
                 f"```\n"
-                f"{CMD} wol <name>           Wake-on-LAN\n"
-                f"{CMD} pc shutdown <name>   シャットダウン\n"
-                f"{CMD} pc reboot <name>     再起動\n"
+                f"{CMD} wol <name>        Wake-on-LAN\n"
+                f"{CMD} shutdown <name>   シャットダウン（自ホスト含む）\n"
+                f"{CMD} reboot <name>     再起動（自ホスト含む）\n"
                 "```"
             ),
         },
@@ -1020,9 +1036,7 @@ HOME_BLOCKS = [
             "text": (
                 "*⚙️ システム*\n"
                 f"```\n"
-                f"{CMD} extend <分>   シャットダウン時間を設定（0 で無効化）\n"
-                f"{CMD} shutdown      ホストシャットダウン\n"
-                f"{CMD} reboot        ホスト再起動\n"
+                f"{CMD} extend <分>   自動シャットダウンまでの時間を設定（0 で無効化）\n"
                 "```"
             ),
         },

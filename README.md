@@ -144,21 +144,21 @@ network:
   cidr: "192.168.1.0/24"
 
 hosts:
+  raspberrypi:
+    ip: "192.168.1.10"
+    self: true               # この Bot が動作しているホスト
+
   desktop:
     ip: "192.168.1.20"
-    mac: "11:22:33:44:55:66"
+    mac: "11:22:33:44:55:66"  # wol/watch 用（任意）
+    os: "windows"             # shutdown/reboot 用（任意）
+    user: "your_user"
+    password: "your_password"
 
 ports:
   ssh: 22
   rdp: 3389
   smb: 445
-
-pc:
-  desktop:
-    ip: "192.168.1.20"
-    os: "windows"
-    user: "your_user"
-    password: "your_password"
 
 timeout:
   minutes: 30             # 0 = 無操作シャットダウン無効（手動のみ）
@@ -200,10 +200,8 @@ App Home タブにコマンド一覧が表示されます。
 | `/local watch <ip\|name>` | 指定ホストの疎通監視を開始（IP またはホスト名） |
 | `/local unwatch <ip\|name>` | 監視解除 |
 | `/local watchlist` | 監視中ホスト一覧 |
-| `/local pc shutdown <name>` | PC をシャットダウン |
-| `/local pc reboot <name>` | PC を再起動 |
-| `/local shutdown` | ホストをシャットダウン（権限チェックあり） |
-| `/local reboot` | ホストを再起動（権限チェックあり） |
+| `/local shutdown <name>` | 指定ホストをシャットダウン（自ホスト含む、権限チェックあり） |
+| `/local reboot <name>` | 指定ホストを再起動（自ホスト含む、権限チェックあり） |
 
 不明なコマンドはあいまいマッチで候補を提示します。
 
@@ -266,17 +264,27 @@ Upload: 8.01 Mbit/s
 
 ---
 
-## PC 管理
+## shutdown / reboot
 
 ```
-/local pc shutdown desktop
-/local pc reboot desktop
+/local shutdown desktop
+/local reboot desktop
+/local shutdown raspberrypi   # self: true のホスト → ローカル実行
 ```
 
-| OS | 方式 |
-|----|------|
-| Windows | `net rpc shutdown`（追加ソフト不要） |
-| Linux / macOS | SSH |
+`hosts` の設定内容によって動作が変わります。
+
+| `hosts` の設定 | 動作 |
+|---|---|
+| `self: true` | この Bot が動作しているホストでローカル実行（5秒後に `sudo shutdown` / `sudo reboot`） |
+| `os: windows` | `net rpc shutdown`（追加ソフト不要） |
+| `os: linux` / `os: macos` | SSH |
+| いずれも未設定 | 「shutdown/reboot に対応していません」と返答 |
+
+`notify_user_id` のユーザー以外が実行した場合は権限エラーになります。
+
+`watch` 中のホストに対して実行すると、オフライン誤通知を防ぐため拒否されます。
+事前に `/local unwatch <name>` で監視を解除してください。
 
 ---
 
